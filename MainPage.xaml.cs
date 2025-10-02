@@ -1,24 +1,42 @@
 ﻿using Microsoft.Maui.ApplicationModel;
 using Plugin.BLE;
+using Plugin.BLE.Abstractions;
 using Plugin.BLE.Abstractions.Contracts;
+using Plugin.BLE.Abstractions.Exceptions;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Windows.Input;
 
 namespace firmware_upgrade
 {
+
+    public class BLEDevice
+    {
+        public string Name
+        {
+            get;
+
+            set;
+        }
+
+        public IDevice BaseDevice { get; set; }
+
+
+    }
     public partial class MainPage : ContentPage
     {
 
-        public ObservableCollection<IDevice> Devices { get; set; } = new();
+        public ObservableCollection<BLEDevice> Devices { get; set; } = new();
 
+        public ICommand connectCommand;
+        public ICommand ConnectCommand => new Command<BLEDevice>(OnConnectClicked);
+
+        public IBluetoothLE ble { get; set; }
+        public IAdapter adapter { get; set; }
         public MainPage()
         {
             InitializeComponent();
             BindingContext = this;
-
-            //Task.Run(() => CheckBluetoothAccess());
-
-            //Task.Run(() => RequestBluetoothAccess());
         }
 
         protected override async void OnAppearing()
@@ -28,9 +46,13 @@ namespace firmware_upgrade
             OnConnectionClicked();
             await CheckAndRequestBluetoothPermissions();
 
-            var ble = CrossBluetoothLE.Current;
-            var adapter = CrossBluetoothLE.Current.Adapter;
-            var state = ble.State;
+            ble = CrossBluetoothLE.Current;
+            adapter = CrossBluetoothLE.Current.Adapter;
+
+            BluetoothState state = ble.State;
+
+
+
 
             ble.StateChanged += (s, e) =>
             {
@@ -39,9 +61,28 @@ namespace firmware_upgrade
 
             adapter.DeviceDiscovered += (s, a) =>
             {
-                Devices.Add(a.Device);
-                Console.WriteLine(a.Device.Name);
+
+                var name = a.Device.Id.ToString().ToUpper();
+                var last12 = name.Substring(Math.Max(0, name.Length - 12));
+
+
+                BLEDevice device = new BLEDevice
+                {
+                    Name = last12,
+                    BaseDevice = a.Device
+                };
+
+                Devices.Add(device);
+                Console.WriteLine("DEVICE:" + a.Device.Id);
             };
+
+
+            var scanFilterOptions = new ScanFilterOptions();
+            //scanFilterOptions.ServiceUuids = new[] { guid1, guid2, etc }; // cross platform filter
+            //scanFilterOptions.ManufacturerDataFilters = new[] { new ManufacturerDataFilter(1), new ManufacturerDataFilter(2) }; // android only filter
+            scanFilterOptions.DeviceAddresses = new[] { "10:B9:F7", }; // android only filter
+            await adapter.StartScanningForDevicesAsync(scanFilterOptions);
+
             await adapter.StartScanningForDevicesAsync();
 
 
@@ -133,5 +174,51 @@ namespace firmware_upgrade
                 return false;
             }
         }
+
+        private async void OnConnectClicked(BLEDevice device)
+        {
+            Console.WriteLine(device.Name + "XXXXXXXXXXXXXXXXX");
+
+            try
+            {
+                await adapter.ConnectToDeviceAsync(device.BaseDevice);
+
+                var service = await adapter.ConnectedDevices[0].GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
+
+                var characteristics = await service.GetCharacteristicsAsync();
+
+                var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
+
+                byte[] loginBytes = new byte[]
+                {
+                    0x01,       // Protocol Version
+                    0x10, 0x00, // Telegram Type (0x0010)
+                    0x09, 0x00, // Total Length (0x0009)
+                    0xFB, 0x95, // CRC16 (0x95FB)
+                    0x1D, 0x01  // Login Value (0x011D = 285)
+                };
+
+                await writeCharacteristic.WriteAsync(loginBytes);
+
+                // 0003cdd2-0000-1000-8000-00805f9b0131 Write charcchteristic
+
+                foreach (var c in characteristics)
+                {
+                    Console.WriteLine($"CHARS: " +
+                        $"Id:{c.Id} " +
+                        $"\n\n UUID: {c.Uuid} " +
+                        $"\n\n Can read?: {c.CanRead} " +
+                        $"\n\n Can write?: {c.CanWrite} " +
+                        $"\n\n Can update?: {c.CanUpdate}"
+                        );
+                }
+
+            }
+            catch (DeviceConnectionException e)
+            {
+                // ... could not connect to device
+            }
+        }
+
     }
 }
