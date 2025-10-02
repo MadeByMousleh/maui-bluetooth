@@ -1,0 +1,11 @@
+.vs/
+debug/
+obj/
+*.user
+*.suo
+bin/
+*.suo
+*.userosscache
+*.sln.docstates
+*.ncrunch*
+
