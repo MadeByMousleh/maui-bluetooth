@@ -21,6 +21,8 @@ namespace firmware_upgrade
 
         public IDevice BaseDevice { get; set; }
 
+        public bool IsConnected { get; set; } = false;
+
 
     }
     public partial class MainPage : ContentPage
@@ -72,7 +74,10 @@ namespace firmware_upgrade
                     BaseDevice = a.Device
                 };
 
-                Devices.Add(device);
+                if (device.Name.ToUpper().Contains("10B9F7"))
+                {
+                    Devices.Add(device); 
+                }
                 Console.WriteLine("DEVICE:" + a.Device.Id);
             };
 
@@ -181,6 +186,7 @@ namespace firmware_upgrade
 
             try
             {
+                
                 await adapter.ConnectToDeviceAsync(device.BaseDevice);
 
                 var service = await adapter.ConnectedDevices[0].GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
@@ -213,12 +219,30 @@ namespace firmware_upgrade
                         );
                 }
 
+                // Assuming 'service' is your IDevice's service instance
+                var notifyCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
+
+                if (notifyCharacteristic != null && notifyCharacteristic.CanUpdate)
+                {
+                    notifyCharacteristic.ValueUpdated += (s, e) =>
+                    {
+                        var data = e.Characteristic.Value; // byte []
+                        // Handle the notification data here
+                        Console.WriteLine("Notification received: " + BitConverter.ToString(data));
+                    };
+
+                    await notifyCharacteristic.StartUpdatesAsync();
+                }
+
             }
             catch (DeviceConnectionException e)
             {
                 // ... could not connect to device
             }
         }
+
+
+
 
     }
 }
