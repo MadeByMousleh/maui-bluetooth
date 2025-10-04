@@ -76,7 +76,7 @@ namespace firmware_upgrade
 
                 if (device.Name.ToUpper().Contains("10B9F7"))
                 {
-                    Devices.Add(device); 
+                    Devices.Add(device);
                 }
                 Console.WriteLine("DEVICE:" + a.Device.Id);
             };
@@ -186,13 +186,13 @@ namespace firmware_upgrade
 
             try
             {
-                
+
                 await adapter.ConnectToDeviceAsync(device.BaseDevice);
 
-               bool isInSensorBoot = await IsDeviceInSensorBootMode(adapter.ConnectedDevices[0]);
+                bool isInSensorBoot = await IsDeviceInSensorBootMode(adapter.ConnectedDevices[0]);
 
-                if(isInSensorBoot)
-                {                    
+                if (isInSensorBoot)
+                {
                     return;
 
                 }
@@ -288,7 +288,7 @@ namespace firmware_upgrade
 
                 var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
 
-                if(writeCharacteristic == null)
+                if (writeCharacteristic == null)
                 {
                     return false;
                 }
@@ -308,87 +308,82 @@ namespace firmware_upgrade
         }
 
 
-        public async Task<bool> WriteBootPackets(byte[] bytes)
+        public async Task<byte[]> WriteBootPackets(byte[] bytes)
         {
             IDevice connectedDevice = Devices[0].BaseDevice;
 
             var service = await connectedDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
-
-
             if (service == null)
             {
                 Console.WriteLine("SERVICE IS NULL");
-                return false;
+                return null;
             }
 
-            if (service != null)
+            var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
+            if (writeCharacteristic == null)
             {
-                Console.WriteLine("SERVICE IS NOT NULL");
-                Console.WriteLine($"SERVICE: {service.Id}");
-
-                var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
-
-                if (writeCharacteristic == null)
-                {
-                    Console.WriteLine("writeCharacteristic IS NULL");
-
-                    return false;
-                }
-
-
-                if (writeCharacteristic != null)
-                {
-                    Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
-
-
-                    if (writeCharacteristic != null && writeCharacteristic.CanUpdate)
-                    {
-                        writeCharacteristic.ValueUpdated += (s, e) =>
-                        {
-                            var data = e.Characteristic.Value; // byte []
-                                                               // Handle the notification data here
-                            Console.WriteLine("Notification received: " + BitConverter.ToString(data));
-                        };
-
-                        await writeCharacteristic.StartUpdatesAsync();
-                    }
-
-
-                    Console.WriteLine("BYTES: " + BitConverter.ToString(bytes));
-                    await writeCharacteristic.WriteAsync(bytes);
-
-
-                    return true;
-                }
-
+                Console.WriteLine("writeCharacteristic IS NULL");
+                return null;
             }
 
-            return false;
+            Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
+
+            var tcs = new TaskCompletionSource<byte[]>();
+
+            // subscribe to notifications
+            if (writeCharacteristic.CanUpdate)
+            {
+                writeCharacteristic.ValueUpdated += (s, e) =>
+                {
+                    var data = e.Characteristic.Value;
+                    Console.WriteLine("Notification received: " + BitConverter.ToString(data));
+                    tcs.TrySetResult(data);  // signal that we got the response
+                };
+
+                await writeCharacteristic.StartUpdatesAsync();
+            }
+
+            Console.WriteLine("BYTES: " + BitConverter.ToString(bytes));
+            await writeCharacteristic.WriteAsync(bytes);
+
+            // wait for response or timeout
+            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(5000)); // 5s timeout
+            if (completedTask == tcs.Task)
+            {
+                return tcs.Task.Result; // return received data
+            }
+            else
+            {
+                Console.WriteLine("Timeout waiting for response.");
+                return null;
+            }
         }
+
 
         public async Task<bool> EnterBootLoader(ICharacteristic characteristic)
         {
-            BootLoaderPacketGen bootGen = new BootLoaderPacketGen();
+            byte[] enterBootloaderBytes = new byte[]
+            {
+                0x01, 0x38, 0x06, 0x00,
+                0x49, 0xA1, 0x34, 0xB6,
+                0xC7, 0x79, 0xAD, 0xFC, 0x17
+            };
 
-            byte[] enterBooladerBytes = new byte[]
-              {
-                    0x01,       // Start of packet
-                    0x38,       // Enter bootloader command
-                    0x06, 0x00, // length
-                    0x49,0xA1, // security ID
-                    0x34,0xB6,
-                    0xC7,0x79,
-                    0xAD,0xFC, // checksum
-                    0x17,      // End of packet
-              };
+            var response = await WriteBootPackets(enterBootloaderBytes);
 
-
-           await WriteBootPackets(enterBooladerBytes);
-
-
-            return true;
-
+            if (response != null)
+            {
+                Console.WriteLine("Bootloader response: " + BitConverter.ToString(response));
+                // Optionally parse or validate the response here
+                return true;
+            }
+            else
+            {
+                Console.WriteLine("No response received from bootloader.");
+                return false;
+            }
         }
+
 
 
     }
