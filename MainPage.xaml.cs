@@ -193,6 +193,7 @@ namespace firmware_upgrade
 
                 if (isInSensorBoot)
                 {
+
                     return;
 
                 }
@@ -256,8 +257,6 @@ namespace firmware_upgrade
             }
         }
 
-
-
         public async Task<bool> IsDeviceInSensorBootMode(IDevice connectedDevice)
         {
             var service = await connectedDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
@@ -297,7 +296,7 @@ namespace firmware_upgrade
                 if (writeCharacteristic != null)
                 {
                     Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
-                    await EnterBootLoader(writeCharacteristic);
+                    await StartDFU(writeCharacteristic);
                     return true;
                 }
 
@@ -306,7 +305,6 @@ namespace firmware_upgrade
             return false;
 
         }
-
 
         public async Task<byte[]> WriteBootPackets(byte[] bytes)
         {
@@ -359,7 +357,6 @@ namespace firmware_upgrade
             }
         }
 
-
         public async Task<bool> EnterBootLoader(ICharacteristic characteristic)
         {
             byte[] enterBootloaderBytes = new byte[]
@@ -385,6 +382,57 @@ namespace firmware_upgrade
         }
 
 
+        public async Task<bool> GetFlashSize(ICharacteristic characteristic)
+        {
+            byte[] enterBootloaderBytes = new byte[]
+            {
+                0x01, 0x32, 0x06, 0x01,
+                0x00, 0x00, 0xCC, 0xFF,
+                0x17
+            };
+
+
+
+            var response = await WriteBootPackets(enterBootloaderBytes);
+
+            if (response != null)
+            {
+
+                Console.WriteLine("Bootloader response: " + BitConverter.ToString(response));
+                // Optionally parse or validate the response here
+                return true;
+            }
+            else
+            {
+                Console.WriteLine("No response received from bootloader.");
+                return false;
+            }
+        }
+
+
+        public async  Task StartDFU(ICharacteristic characteristic)
+        {
+            bool isBootloaderEntered = await EnterBootLoader(characteristic);
+
+            if (!isBootloaderEntered) return;
+
+            Console.WriteLine("Bootlaoder mesage recieved");
+
+            bool isFlashSizeRecieved = await GetFlashSize(characteristic);
+
+            if (!isFlashSizeRecieved) return;
+
+            Console.WriteLine("GET FLASH SIZE MESSAGE RECIEVED");
+
+            string relativePath = "firmwares/P48/0227/353BL10604.cyacd";
+
+
+
+            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
+
+            byte[] flashRows = await payloadProcessor.GetFirmwareFlashPackets();
+
+        }
 
     }
 }

@@ -25,7 +25,7 @@ public class FlashRow
         bytes[3] = (byte)(DataLength >> 8);
         bytes[4] = (byte)(DataLength & 0xFF);
         Buffer.BlockCopy(Data, 0, bytes, 5, Data.Length);
-        bytes[5 + Data.Length] = Checksum;
+        bytes[bytes.Length - 1] = Checksum;
         return bytes;
     }
 }

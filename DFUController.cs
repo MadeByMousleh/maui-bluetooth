@@ -22,7 +22,7 @@ public class DFUController
         _writeMethod = writeMethod;
         _bleDevice = bleDevice;
         _processor = new PayloadProcessor(_payload, _securityId);
-        _rows = _processor.GetFlashDataLines();
+        //_rows = _processor.GetFlashDataLines();
     }
 
     private List<string> SplitRowIntoChunks(string row)
