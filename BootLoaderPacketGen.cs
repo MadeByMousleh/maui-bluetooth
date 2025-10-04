@@ -114,6 +114,10 @@ public class BootLoaderPacketGen
     // Create Enter BootLoader Packet (returns hex string)
     public string CreateEnterBootLoaderPacket()
     {
+
+        
+        const byte EnterBootLoaderCommand = 0x38;
+
         var dataBuffer = SecurityId;
         var length = CalculateDataLength(dataBuffer.Length);
         var checksum = CalculateChecksum(EnterBootLoaderCommand, length, dataBuffer);
@@ -221,5 +225,5 @@ public class BootLoaderPacketGen
     // Additional packet methods (getFlashSize, sendDataPacket, writeRowPacket, etc.) can be implemented similarly as needed.
 }
 
-var bootGen = new BootLoaderPacketGen();
-string packet = bootGen.CreateEnterBootLoaderPacket();
+//var bootGen = new BootLoaderPacketGen();
+//string packet = bootGen.CreateEnterBootLoaderPacket();

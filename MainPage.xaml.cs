@@ -189,11 +189,24 @@ namespace firmware_upgrade
                 
                 await adapter.ConnectToDeviceAsync(device.BaseDevice);
 
+               bool isInSensorBoot = await IsDeviceInSensorBootMode(adapter.ConnectedDevices[0]);
+
+                if(isInSensorBoot)
+                {
+                    // Enter DFU mode
+                    
+                    // 1. Enter bootloader
+
+                }
+
+
                 var service = await adapter.ConnectedDevices[0].GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
 
                 var characteristics = await service.GetCharacteristicsAsync();
 
                 var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
+
+
 
                 byte[] loginBytes = new byte[]
                 {
@@ -205,6 +218,10 @@ namespace firmware_upgrade
                 };
 
                 await writeCharacteristic.WriteAsync(loginBytes);
+
+                //DFUController dfuController = new DFUController("",);
+
+
 
                 // 0003cdd2-0000-1000-8000-00805f9b0131 Write charcchteristic
 
@@ -242,6 +259,71 @@ namespace firmware_upgrade
         }
 
 
+
+        public async Task<bool> IsDeviceInSensorBootMode(IDevice connectedDevice)
+        {
+            var service = await connectedDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
+
+            if(service == null)
+            {
+                Console.WriteLine("SERVICE IS NULL");
+                return false;
+            }
+
+            if (service != null)
+            {
+                Console.WriteLine("SERVICE IS NOT NULL");
+                Console.WriteLine($"SERVICE: {service.Id}");
+
+                var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
+
+                if(writeCharacteristic == null)
+                {
+                    return false;
+                }
+
+
+                if (writeCharacteristic != null)
+                {
+                    Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
+                    return true;
+                }
+
+            }
+
+            return false;
+
+        }
+
+
+        public async Task WriteBootPackets()
+        {
+
+        }
+
+        public async Task<bool> EnterBootLoader()
+        {
+            BootLoaderPacketGen bootGen = new BootLoaderPacketGen();
+
+            byte[] enterBooladerBytes = new byte[]
+              {
+                    0x01,       // Start of packet
+                    0x38,       // Enter bootloader command
+                    0x06, 0x00, // length
+                    0x49,0xA1, // security ID
+                    0x34,0xB6,
+                    0xC7,0x79,
+                    0xAD,0xFC, // checksum
+                    0x17,      // End of packet
+              };
+
+            //
+            //01-38-060049A134B6C779ADFC17
+            bootGen.EnterBootLoader("49A1-34-B6-C7-79");
+
+            return Task.FromResult(true).Result;
+
+        }
 
 
     }
