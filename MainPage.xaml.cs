@@ -192,10 +192,8 @@ namespace firmware_upgrade
                bool isInSensorBoot = await IsDeviceInSensorBootMode(adapter.ConnectedDevices[0]);
 
                 if(isInSensorBoot)
-                {
-                    // Enter DFU mode
-                    
-                    // 1. Enter bootloader
+                {                    
+                    return;
 
                 }
 
@@ -264,7 +262,20 @@ namespace firmware_upgrade
         {
             var service = await connectedDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
 
-            if(service == null)
+            var allCharachterstics = await service.GetCharacteristicsAsync();
+
+            foreach (var c in allCharachterstics)
+            {
+                Console.WriteLine($"CHARS: " +
+                    $"Id:{c.Id} " +
+                    $"\n\n UUID: {c.Uuid} " +
+                    $"\n\n Can read?: {c.CanRead} " +
+                    $"\n\n Can write?: {c.CanWrite} " +
+                    $"\n\n Can update?: {c.CanUpdate}"
+                    );
+            }
+
+            if (service == null)
             {
                 Console.WriteLine("SERVICE IS NULL");
                 return false;
@@ -286,6 +297,7 @@ namespace firmware_upgrade
                 if (writeCharacteristic != null)
                 {
                     Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
+                    await EnterBootLoader(writeCharacteristic);
                     return true;
                 }
 
@@ -296,12 +308,65 @@ namespace firmware_upgrade
         }
 
 
-        public async Task WriteBootPackets()
+        public async Task<bool> WriteBootPackets(byte[] bytes)
         {
+            IDevice connectedDevice = Devices[0].BaseDevice;
 
+            var service = await connectedDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
+
+
+            if (service == null)
+            {
+                Console.WriteLine("SERVICE IS NULL");
+                return false;
+            }
+
+            if (service != null)
+            {
+                Console.WriteLine("SERVICE IS NOT NULL");
+                Console.WriteLine($"SERVICE: {service.Id}");
+
+                var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
+
+                if (writeCharacteristic == null)
+                {
+                    Console.WriteLine("writeCharacteristic IS NULL");
+
+                    return false;
+                }
+
+
+                if (writeCharacteristic != null)
+                {
+                    Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
+
+
+                    if (writeCharacteristic != null && writeCharacteristic.CanUpdate)
+                    {
+                        writeCharacteristic.ValueUpdated += (s, e) =>
+                        {
+                            var data = e.Characteristic.Value; // byte []
+                                                               // Handle the notification data here
+                            Console.WriteLine("Notification received: " + BitConverter.ToString(data));
+                        };
+
+                        await writeCharacteristic.StartUpdatesAsync();
+                    }
+
+
+                    Console.WriteLine("BYTES: " + BitConverter.ToString(bytes));
+                    await writeCharacteristic.WriteAsync(bytes);
+
+
+                    return true;
+                }
+
+            }
+
+            return false;
         }
 
-        public async Task<bool> EnterBootLoader()
+        public async Task<bool> EnterBootLoader(ICharacteristic characteristic)
         {
             BootLoaderPacketGen bootGen = new BootLoaderPacketGen();
 
@@ -317,11 +382,11 @@ namespace firmware_upgrade
                     0x17,      // End of packet
               };
 
-            //
-            //01-38-060049A134B6C779ADFC17
-            bootGen.EnterBootLoader("49A1-34-B6-C7-79");
 
-            return Task.FromResult(true).Result;
+           await WriteBootPackets(enterBooladerBytes);
+
+
+            return true;
 
         }
 
