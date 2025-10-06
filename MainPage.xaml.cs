@@ -90,11 +90,31 @@ namespace firmware_upgrade
 
         public IBluetoothLE ble { get; set; }
         public IAdapter adapter { get; set; }
+
+
+
+
+
+        //private TaskCompletionSource<byte[]> _notificationTcs;
+
+        private object _lock = new();
+
+        TaskCompletionSource<byte[]> tcs = new TaskCompletionSource<byte[]>();
+
+
+
         public MainPage()
         {
             InitializeComponent();
             BindingContext = this;
         }
+
+
+
+
+
+
+
 
         private bool _isScanningStarted = false;
 
@@ -125,6 +145,25 @@ namespace firmware_upgrade
                 _isScanningStarted = true;
             }
         }
+
+        //private void OnNotificationReceived(object sender, CharacteristicUpdatedEventArgs e)
+        //{
+        //    var data = e.Characteristic.Value;
+
+        //    lock (_lock)
+        //    {
+        //        _notificationTcs?.TrySetResult(data);
+        //    }
+        //}
+        //public async Task PrepareNotificationsAsync(ICharacteristic notifyCharacteristic)
+        //{
+        //    if (notifyCharacteristic == null || !notifyCharacteristic.CanUpdate)
+        //        throw new InvalidOperationException("Characteristic does not support notifications.");
+
+        //    notifyCharacteristic.ValueUpdated += OnNotificationReceived;
+        //    await notifyCharacteristic.StartUpdatesAsync();
+        //}
+
 
         private void OnBleStateChanged(object sender, BluetoothStateChangedArgs e)
         {
@@ -248,6 +287,8 @@ namespace firmware_upgrade
 
                 await adapter.ConnectToDeviceAsync(device.BaseDevice);
 
+                await ConnectAndGetMtuAsync(device.BaseDevice);
+
                 bool isInSensorBoot = await IsDeviceInSensorBootMode(adapter.ConnectedDevices[0]);
 
                 if (isInSensorBoot)
@@ -365,71 +406,21 @@ namespace firmware_upgrade
 
         }
 
+
+
         // Write a packet and wait for the notification response for that single write.
         // Uses per-call event handler and unsubscribes afterwards.
         // Assumes the device sends its response as a notification on the same characteristic.
-        public async Task<byte[]> WriteBootPackets(ICharacteristic writeCharacteristic, byte[] bytes, int timeoutMs = 5000)
+        public async Task WriteBootPackets(ICharacteristic writeCharacteristic, byte[] bytes, int timeoutMs = 5000)
         {
             if (writeCharacteristic == null) throw new ArgumentNullException(nameof(writeCharacteristic));
 
-            var tcs = new TaskCompletionSource<byte[]>();
+            await writeCharacteristic.WriteAsync(bytes);
 
-            // Local handler so we can safely remove it later.
-            EventHandler<CharacteristicUpdatedEventArgs> handler = null!;
-            handler = (s, e) =>
-            {
-                try
-                {
-                    var data = e.Characteristic.Value;
-                    Console.WriteLine($"We send:{BitConverter.ToString(bytes)}");
-                    Console.WriteLine($"We recieved:{BitConverter.ToString(data)}");
-                    // you can inspect data here to ensure it matches the request if protocol provides IDs
-                    tcs.TrySetResult(data);
-                }
-                catch (Exception ex)
-                {
-                    tcs.TrySetException(ex);
-                }
-            };
-
-            try
-            {
-                // Subscribe
-                if (writeCharacteristic.CanUpdate)
-                {
-                    writeCharacteristic.ValueUpdated += handler;
-                    await writeCharacteristic.StartUpdatesAsync();
-                }
-
-                // Write (await the write to make sure bytes were sent)
-                await writeCharacteristic.WriteAsync(bytes);
-
-                // Wait for response or timeout
-                var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
-                if (completed == tcs.Task)
-                {
-                    // awaited result to propagate exceptions correctly
-                    return await tcs.Task;
-                }
-                else
-                {
-                    // timeout
-                    return null;
-                }
-            }
-            finally
-            {
-                // Unsubscribe and stop updates (best-effort)
-                if (writeCharacteristic.CanUpdate)
-                {
-                    try { writeCharacteristic.ValueUpdated -= handler; } catch { }
-                    try { await writeCharacteristic.StopUpdatesAsync(); } catch { }
-                }
-            }
         }
 
         // Use the same characteristic you pass into StartDFU:
-        public async Task<bool> EnterBootLoader(ICharacteristic characteristic)
+        public async Task EnterBootLoader(ICharacteristic characteristic)
         {
             byte[] enterBootloaderBytes = new byte[]
             {
@@ -438,21 +429,11 @@ namespace firmware_upgrade
         0xC7, 0x79, 0xAD, 0xFC, 0x17
             };
 
-            var response = await WriteBootPackets(characteristic, enterBootloaderBytes);
+            await WriteBootPackets(characteristic, enterBootloaderBytes);
 
-            if (response != null)
-            {
-                Console.WriteLine("Bootloader response: " + BitConverter.ToString(response));
-                return true;
-            }
-            else
-            {
-                Console.WriteLine("No response received from bootloader.");
-                return false;
-            }
         }
 
-        public async Task<bool> GetFlashSize(ICharacteristic characteristic)
+        public async Task GetFlashSize(ICharacteristic characteristic)
         {
             byte[] getSizeBytes = new byte[]
             {
@@ -461,48 +442,54 @@ namespace firmware_upgrade
         0x17
             };
 
-            var response = await WriteBootPackets(characteristic, getSizeBytes);
+            await WriteBootPackets(characteristic, getSizeBytes);
 
-            if (response != null)
-            {
-                Console.WriteLine("GetFlashSize response: " + BitConverter.ToString(response));
-                return true;
-            }
-            else
-            {
-                Console.WriteLine("No response received from bootloader (GetFlashSize).");
-                return false;
-            }
+
         }
 
         // Send a single DFU packet using the provided characteristic.
         // IMPORTANT: this no longer increments RowReachedCount.
-        public async Task<bool> SendBootLoaderPacket(ICharacteristic writeCharacteristic, byte[] packet)
+        public async Task SendBootLoaderPacket(ICharacteristic writeCharacteristic, byte[] packet)
         {
-            var response = await WriteBootPackets(writeCharacteristic, packet);
+            await WriteBootPackets(writeCharacteristic, packet);
 
-            if (response != null)
-            {
-                Console.WriteLine("Bootloader response: " + BitConverter.ToString(response));
-                return true;
-            }
-            else
-            {
-                Console.WriteLine("No response received from bootloader (timeout).");
-                return false;
-            }
         }
 
 
+        public async Task ConnectAndGetMtuAsync(IDevice device)
+        {
+            try
+            {
+
+            #if ANDROID
+            // Request a specific MTU size (Android only)
+            int requestedMtu = 270;
+            int negotiatedMtu = await device.RequestMtuAsync(requestedMtu);
+            Console.WriteLine($"Negotiated MTU: {negotiatedMtu}");
+
+            // Use `negotiatedMtu` as the current MTU
+            #else
+                Console.WriteLine("MTU negotiation is not supported on this platform (likely iOS)");
+            #endif
+            }
+            catch (DeviceConnectionException ex)
+            {
+                Console.WriteLine($"Connection failed: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Unexpected error: {ex}");
+            }
+        }
+
         public async Task StartDFU(ICharacteristic characteristic)
         {
-            bool isBootloaderEntered = await EnterBootLoader(characteristic);
-            if (!isBootloaderEntered) return;
+            await EnterBootLoader(characteristic);
 
-            bool isFlashSizeReceived = await GetFlashSize(characteristic);
-            if (!isFlashSizeReceived) return;
+            await GetFlashSize(characteristic);
 
-            string relativePath = "firmwares/P48/0227/353BL10604.cyacd";
+
+            string relativePath = "firmwares/P48/0227/353AP30227.cyacd";
             PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
 
             List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
@@ -517,12 +504,7 @@ namespace firmware_upgrade
 
             foreach (var rowPacket in flashRows)
             {
-                bool ok = await SendBootLoaderPacket(characteristic, rowPacket);
-                if (!ok)
-                {
-                    Console.WriteLine("Failed to program row. Aborting DFU.");
-                    return;
-                }
+                await SendBootLoaderPacket(characteristic, rowPacket);
 
                 // update progress ONCE per successful row on UI thread
                 MainThread.BeginInvokeOnMainThread(() =>

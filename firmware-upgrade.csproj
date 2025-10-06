@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<TargetFrameworks>net9.0-android;net9.0-ios;net9.0-maccatalyst</TargetFrameworks>
@@ -63,7 +63,34 @@
 		<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="9.0.5" />
 		<PackageReference Include="Plugin.BLE" Version="3.1.0" />
+		<PackageReference Include="Shiny" Version="2.7.3" />
 		<PackageReference Include="Shiny.BluetoothLE" Version="3.3.4" />
+		<PackageReference Include="Shiny.BluetoothLE.Common" Version="3.3.4" />
+		<PackageReference Include="Shiny.Hosting.Maui" Version="3.3.4" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <MauiXaml Update="shiny.xaml">
+	    <Generator>MSBuild:Compile</Generator>
+	  </MauiXaml>
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(TargetFramework)' == 'net9.0-android'">
+	  <PackageReference Include="Shiny.Extensions.Configuration">
+	    <Version>3.3.4</Version>
+	  </PackageReference>
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(TargetFramework)' == 'net9.0-ios'">
+	  <PackageReference Include="Shiny.Extensions.Configuration">
+	    <Version>3.3.4</Version>
+	  </PackageReference>
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(TargetFramework)' == 'net9.0-maccatalyst'">
+	  <PackageReference Include="Shiny.Extensions.Configuration">
+	    <Version>3.3.4</Version>
+	  </PackageReference>
 	</ItemGroup>
 
 </Project>

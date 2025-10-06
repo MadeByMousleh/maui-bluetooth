@@ -16,6 +16,7 @@ namespace firmware_upgrade.Services
         {
             _ble = ble;
             _adapter = adapter;
+
         }
 
         public async Task<bool> ConnectAsync(IDevice device)
