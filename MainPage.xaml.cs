@@ -396,7 +396,13 @@ namespace firmware_upgrade
                 if (writeCharacteristic != null)
                 {
                     Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
-                    await StartDFU(writeCharacteristic);
+                    bool isDone = await UpgradeBootloader(writeCharacteristic);
+                    if (isDone)
+                    {
+                        await UpgradeSensor(writeCharacteristic);
+                    }
+                    //await UpgradeSensor(writeCharacteristic);
+
                     return true;
                 }
 
@@ -461,16 +467,16 @@ namespace firmware_upgrade
             try
             {
 
-            #if ANDROID
+#if ANDROID
             // Request a specific MTU size (Android only)
             int requestedMtu = 270;
             int negotiatedMtu = await device.RequestMtuAsync(requestedMtu);
             Console.WriteLine($"Negotiated MTU: {negotiatedMtu}");
 
             // Use `negotiatedMtu` as the current MTU
-            #else
+#else
                 Console.WriteLine("MTU negotiation is not supported on this platform (likely iOS)");
-            #endif
+#endif
             }
             catch (DeviceConnectionException ex)
             {
@@ -482,14 +488,82 @@ namespace firmware_upgrade
             }
         }
 
-        public async Task StartDFU(ICharacteristic characteristic)
+        public async Task<bool> UpgradeBootloader(ICharacteristic characteristic)
         {
+            string relativePath = "firmwares/P46/0225/353BL10602.cyacd";
+
             await EnterBootLoader(characteristic);
+          
+
+            await GetFlashSize(characteristic);
+      
+
+            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
+            List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
+
+            RowsToBeProgrammed = flashRows.Count;
+            RowReachedCount = 0;
+
+            for (int i = 0; i < flashRows.Count -1; i++)
+            {
+                var rowPacket = flashRows[i];
+                await SendBootLoaderPacket(characteristic, rowPacket);
+         
+                // UI update on main thread
+                await MainThread.InvokeOnMainThreadAsync(() =>
+                {
+                    RowReachedCount++;
+                });
+
+                Console.WriteLine($"ROW {i + 1}/{flashRows.Count} SENT AND ACKNOWLEDGED");
+            }
+
+            Console.WriteLine("✅ DFU completed successfully.");
+            return true;
+        }
+
+        public async Task<bool> UpgradeSensor(ICharacteristic characteristic)
+        {
+            string relativePath = "firmwares/P46/0225/353AP30225.cyacd";
 
             await GetFlashSize(characteristic);
 
+            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
+            List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
+
+            RowsToBeProgrammed = flashRows.Count;
+            RowReachedCount = 0;
+
+            for (int i = 0; i < flashRows.Count; i++)
+            {
+                var rowPacket = flashRows[i];
+                await SendBootLoaderPacket(characteristic, rowPacket);
+
+                // UI update on main thread
+                await MainThread.InvokeOnMainThreadAsync(() =>
+                {
+                    RowReachedCount++;
+                });
+
+                Console.WriteLine($"ROW {i + 1}/{flashRows.Count} SENT AND ACKNOWLEDGED");
+            }
+
+            Console.WriteLine("✅ DFU completed successfully.");
+            return true;
+        }
+
+
+        public async Task StartDFU(ICharacteristic characteristic, int firmwareType = 0)
+        {
 
             string relativePath = "firmwares/P48/0227/353AP30227.cyacd";
+
+                await EnterBootLoader(characteristic);
+
+                await GetFlashSize(characteristic);
+
+                relativePath = "firmwares/P48/0227/353AP30227.cyacd";
+        
             PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
 
             List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
@@ -510,6 +584,8 @@ namespace firmware_upgrade
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
                     RowReachedCount++; // property setter will update UpgradeProgress
+
+    
                 });
 
                 Console.WriteLine("ROW SENT AND ACKNOWLEDGED");
