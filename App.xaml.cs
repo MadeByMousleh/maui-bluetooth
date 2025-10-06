@@ -1,4 +1,6 @@
-﻿namespace firmware_upgrade
+﻿using Microsoft.Maui.Controls;
+
+namespace firmware_upgrade
 {
     public partial class App : Application
     {

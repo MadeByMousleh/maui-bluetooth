@@ -2,9 +2,12 @@
 using Plugin.BLE;
 using Plugin.BLE.Abstractions;
 using Plugin.BLE.Abstractions.Contracts;
+using Plugin.BLE.Abstractions.EventArgs;
 using Plugin.BLE.Abstractions.Exceptions;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Windows.Input;
 
 namespace firmware_upgrade
@@ -25,10 +28,62 @@ namespace firmware_upgrade
 
 
     }
-    public partial class MainPage : ContentPage
+    public partial class MainPage : ContentPage, INotifyPropertyChanged
     {
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        protected void OnPropertyChanged([CallerMemberName] string propertyName = "")
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
 
         public ObservableCollection<BLEDevice> Devices { get; set; } = new();
+
+
+        private int _upgradeProgress;
+        public int UpgradeProgress
+        {
+            get => _upgradeProgress;
+            set
+            {
+                if (_upgradeProgress != value)
+                {
+                    _upgradeProgress = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private int _rowsToBeProgrammed;
+        public int RowsToBeProgrammed
+        {
+            get => _rowsToBeProgrammed;
+            set
+            {
+                if (_rowsToBeProgrammed != value)
+                {
+                    _rowsToBeProgrammed = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private int _rowReachedCount;
+        public int RowReachedCount
+        {
+            get => _rowReachedCount;
+            set
+            {
+                if (_rowReachedCount != value)
+                {
+                    _rowReachedCount = value;
+                    OnPropertyChanged();
+                    if (RowsToBeProgrammed > 0)
+                        UpgradeProgress = (_rowReachedCount * 100) / RowsToBeProgrammed;
+                }
+            }
+        }
 
         public ICommand connectCommand;
         public ICommand ConnectCommand => new Command<BLEDevice>(OnConnectClicked);
@@ -41,6 +96,8 @@ namespace firmware_upgrade
             BindingContext = this;
         }
 
+        private bool _isScanningStarted = false;
+
         protected override async void OnAppearing()
         {
             base.OnAppearing();
@@ -51,46 +108,48 @@ namespace firmware_upgrade
             ble = CrossBluetoothLE.Current;
             adapter = CrossBluetoothLE.Current.Adapter;
 
-            BluetoothState state = ble.State;
+            ble.StateChanged -= OnBleStateChanged; // remove old handler just in case
+            ble.StateChanged += OnBleStateChanged;
 
-
-
-
-            ble.StateChanged += (s, e) =>
+            if (!_isScanningStarted)
             {
-                Debug.WriteLine($"The bluetooth state changed to {e.NewState}");
-            };
+                adapter.DeviceDiscovered -= OnDeviceDiscovered;
+                adapter.DeviceDiscovered += OnDeviceDiscovered;
 
-            adapter.DeviceDiscovered += (s, a) =>
-            {
-
-                var name = a.Device.Id.ToString().ToUpper();
-                var last12 = name.Substring(Math.Max(0, name.Length - 12));
-
-
-                BLEDevice device = new BLEDevice
+                var scanFilterOptions = new ScanFilterOptions
                 {
-                    Name = last12,
-                    BaseDevice = a.Device
+                    DeviceAddresses = new[] { "10:B9:F7" } // android only filter
                 };
 
-                if (device.Name.ToUpper().Contains("10B9F7"))
-                {
-                    Devices.Add(device);
-                }
-                Console.WriteLine("DEVICE:" + a.Device.Id);
+                await adapter.StartScanningForDevicesAsync(scanFilterOptions);
+                _isScanningStarted = true;
+            }
+        }
+
+        private void OnBleStateChanged(object sender, BluetoothStateChangedArgs e)
+        {
+            Debug.WriteLine($"The bluetooth state changed to {e.NewState}");
+        }
+
+        private void OnDeviceDiscovered(object sender, DeviceEventArgs a)
+        {
+            var name = a.Device.Id.ToString().ToUpper();
+            var last12 = name.Substring(Math.Max(0, name.Length - 12));
+
+            BLEDevice device = new BLEDevice
+            {
+                Name = last12,
+                BaseDevice = a.Device
             };
 
+            if (device.Name.ToUpper().Contains("10B9F7"))
+            {
+                // avoid duplicates
+                if (!Devices.Any(d => d.BaseDevice.Id == device.BaseDevice.Id))
+                    Devices.Add(device);
+            }
 
-            var scanFilterOptions = new ScanFilterOptions();
-            //scanFilterOptions.ServiceUuids = new[] { guid1, guid2, etc }; // cross platform filter
-            //scanFilterOptions.ManufacturerDataFilters = new[] { new ManufacturerDataFilter(1), new ManufacturerDataFilter(2) }; // android only filter
-            scanFilterOptions.DeviceAddresses = new[] { "10:B9:F7", }; // android only filter
-            await adapter.StartScanningForDevicesAsync(scanFilterOptions);
-
-            await adapter.StartScanningForDevicesAsync();
-
-
+            Console.WriteLine("DEVICE:" + a.Device.Id);
         }
 
 
@@ -306,72 +365,84 @@ namespace firmware_upgrade
 
         }
 
-        public async Task<byte[]> WriteBootPackets(byte[] bytes)
+        // Write a packet and wait for the notification response for that single write.
+        // Uses per-call event handler and unsubscribes afterwards.
+        // Assumes the device sends its response as a notification on the same characteristic.
+        public async Task<byte[]> WriteBootPackets(ICharacteristic writeCharacteristic, byte[] bytes, int timeoutMs = 5000)
         {
-            IDevice connectedDevice = Devices[0].BaseDevice;
-
-            var service = await connectedDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
-            if (service == null)
-            {
-                Console.WriteLine("SERVICE IS NULL");
-                return null;
-            }
-
-            var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
-            if (writeCharacteristic == null)
-            {
-                Console.WriteLine("writeCharacteristic IS NULL");
-                return null;
-            }
-
-            Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
+            if (writeCharacteristic == null) throw new ArgumentNullException(nameof(writeCharacteristic));
 
             var tcs = new TaskCompletionSource<byte[]>();
 
-            // subscribe to notifications
-            if (writeCharacteristic.CanUpdate)
+            // Local handler so we can safely remove it later.
+            EventHandler<CharacteristicUpdatedEventArgs> handler = null!;
+            handler = (s, e) =>
             {
-                writeCharacteristic.ValueUpdated += (s, e) =>
+                try
                 {
                     var data = e.Characteristic.Value;
-                    Console.WriteLine("Notification received: " + BitConverter.ToString(data));
-                    tcs.TrySetResult(data);  // signal that we got the response
-                };
+                    Console.WriteLine($"We send:{BitConverter.ToString(bytes)}");
+                    Console.WriteLine($"We recieved:{BitConverter.ToString(data)}");
+                    // you can inspect data here to ensure it matches the request if protocol provides IDs
+                    tcs.TrySetResult(data);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            };
 
-                await writeCharacteristic.StartUpdatesAsync();
-            }
-
-            Console.WriteLine("BYTES: " + BitConverter.ToString(bytes));
-            await writeCharacteristic.WriteAsync(bytes);
-
-            // wait for response or timeout
-            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(5000)); // 5s timeout
-            if (completedTask == tcs.Task)
+            try
             {
-                return tcs.Task.Result; // return received data
+                // Subscribe
+                if (writeCharacteristic.CanUpdate)
+                {
+                    writeCharacteristic.ValueUpdated += handler;
+                    await writeCharacteristic.StartUpdatesAsync();
+                }
+
+                // Write (await the write to make sure bytes were sent)
+                await writeCharacteristic.WriteAsync(bytes);
+
+                // Wait for response or timeout
+                var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+                if (completed == tcs.Task)
+                {
+                    // awaited result to propagate exceptions correctly
+                    return await tcs.Task;
+                }
+                else
+                {
+                    // timeout
+                    return null;
+                }
             }
-            else
+            finally
             {
-                Console.WriteLine("Timeout waiting for response.");
-                return null;
+                // Unsubscribe and stop updates (best-effort)
+                if (writeCharacteristic.CanUpdate)
+                {
+                    try { writeCharacteristic.ValueUpdated -= handler; } catch { }
+                    try { await writeCharacteristic.StopUpdatesAsync(); } catch { }
+                }
             }
         }
 
+        // Use the same characteristic you pass into StartDFU:
         public async Task<bool> EnterBootLoader(ICharacteristic characteristic)
         {
             byte[] enterBootloaderBytes = new byte[]
             {
-                0x01, 0x38, 0x06, 0x00,
-                0x49, 0xA1, 0x34, 0xB6,
-                0xC7, 0x79, 0xAD, 0xFC, 0x17
+        0x01, 0x38, 0x06, 0x00,
+        0x49, 0xA1, 0x34, 0xB6,
+        0xC7, 0x79, 0xAD, 0xFC, 0x17
             };
 
-            var response = await WriteBootPackets(enterBootloaderBytes);
+            var response = await WriteBootPackets(characteristic, enterBootloaderBytes);
 
             if (response != null)
             {
                 Console.WriteLine("Bootloader response: " + BitConverter.ToString(response));
-                // Optionally parse or validate the response here
                 return true;
             }
             else
@@ -380,58 +451,89 @@ namespace firmware_upgrade
                 return false;
             }
         }
-
 
         public async Task<bool> GetFlashSize(ICharacteristic characteristic)
         {
-            byte[] enterBootloaderBytes = new byte[]
+            byte[] getSizeBytes = new byte[]
             {
-                0x01, 0x32, 0x06, 0x01,
-                0x00, 0x00, 0xCC, 0xFF,
-                0x17
+        0x01, 0x32, 0x06, 0x01,
+        0x00, 0x00, 0xCC, 0xFF,
+        0x17
             };
 
-
-
-            var response = await WriteBootPackets(enterBootloaderBytes);
+            var response = await WriteBootPackets(characteristic, getSizeBytes);
 
             if (response != null)
             {
-
-                Console.WriteLine("Bootloader response: " + BitConverter.ToString(response));
-                // Optionally parse or validate the response here
+                Console.WriteLine("GetFlashSize response: " + BitConverter.ToString(response));
                 return true;
             }
             else
             {
-                Console.WriteLine("No response received from bootloader.");
+                Console.WriteLine("No response received from bootloader (GetFlashSize).");
+                return false;
+            }
+        }
+
+        // Send a single DFU packet using the provided characteristic.
+        // IMPORTANT: this no longer increments RowReachedCount.
+        public async Task<bool> SendBootLoaderPacket(ICharacteristic writeCharacteristic, byte[] packet)
+        {
+            var response = await WriteBootPackets(writeCharacteristic, packet);
+
+            if (response != null)
+            {
+                Console.WriteLine("Bootloader response: " + BitConverter.ToString(response));
+                return true;
+            }
+            else
+            {
+                Console.WriteLine("No response received from bootloader (timeout).");
                 return false;
             }
         }
 
 
-        public async  Task StartDFU(ICharacteristic characteristic)
+        public async Task StartDFU(ICharacteristic characteristic)
         {
             bool isBootloaderEntered = await EnterBootLoader(characteristic);
-
             if (!isBootloaderEntered) return;
 
-            Console.WriteLine("Bootlaoder mesage recieved");
-
-            bool isFlashSizeRecieved = await GetFlashSize(characteristic);
-
-            if (!isFlashSizeRecieved) return;
-
-            Console.WriteLine("GET FLASH SIZE MESSAGE RECIEVED");
+            bool isFlashSizeReceived = await GetFlashSize(characteristic);
+            if (!isFlashSizeReceived) return;
 
             string relativePath = "firmwares/P48/0227/353BL10604.cyacd";
-
-
-
             PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
 
-            byte[] flashRows = await payloadProcessor.GetFirmwareFlashPackets();
+            List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
 
+            //foreach(byte[] r in flashRows)
+            //{
+            //    Console.WriteLine("Row packet: " + BitConverter.ToString(r));
+
+            //}
+            RowsToBeProgrammed = flashRows.Count;
+            RowReachedCount = 0; // reset progress
+
+            foreach (var rowPacket in flashRows)
+            {
+                bool ok = await SendBootLoaderPacket(characteristic, rowPacket);
+                if (!ok)
+                {
+                    Console.WriteLine("Failed to program row. Aborting DFU.");
+                    return;
+                }
+
+                // update progress ONCE per successful row on UI thread
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    RowReachedCount++; // property setter will update UpgradeProgress
+                });
+
+                Console.WriteLine("ROW SENT AND ACKNOWLEDGED");
+            }
+
+            Console.WriteLine("DFU completed!");
         }
 
     }

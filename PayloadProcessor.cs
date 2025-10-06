@@ -1,3 +1,4 @@
+using Microsoft.Maui.Controls;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -38,6 +39,61 @@ public class PayloadProcessor
         return bytes;
     }
     // Private method to read data lines and parse them into FlashRow objects
+
+
+
+    // SEND DATA PACKET (0x37)
+    private byte[] CreateSendDataPacket(byte[] data)
+    {
+        byte startCommand = 0x01;
+        byte command = 0x37;
+        byte endCommand = 0x17;
+
+        ushort dataLength = (ushort)data.Length;
+
+        byte[] packetBeforeChecksum = new byte[1 + 1 + 2 + data.Length];
+        int offset = 0;
+        packetBeforeChecksum[offset++] = startCommand;
+        packetBeforeChecksum[offset++] = command;
+        packetBeforeChecksum[offset++] = (byte)(dataLength & 0xFF);
+        packetBeforeChecksum[offset++] = (byte)(dataLength >> 8);
+        Array.Copy(data, 0, packetBeforeChecksum, offset, data.Length);
+
+        ushort checksum = CalculateChecksum(packetBeforeChecksum);
+
+        return packetBeforeChecksum
+            .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endCommand })
+            .ToArray();
+    }
+
+    // PROGRAM ROW PACKET (0x39)
+    private byte[] CreateProgramRowPacket(byte arrayId, ushort rowNumber, byte[] data)
+    {
+        byte startCommand = 0x01;
+        byte command = 0x39;
+        byte endCommand = 0x17;
+
+        ushort dataLength = (ushort)(data.Length + 3); // arrayID(1) + rowNumber(2)
+
+        byte[] packetBeforeChecksum = new byte[1 + 1 + 2 + 1 + 2 + data.Length];
+        int offset = 0;
+        packetBeforeChecksum[offset++] = startCommand;
+        packetBeforeChecksum[offset++] = command;
+        packetBeforeChecksum[offset++] = (byte)(dataLength & 0xFF);
+        packetBeforeChecksum[offset++] = (byte)(dataLength >> 8);
+        packetBeforeChecksum[offset++] = arrayId;
+        packetBeforeChecksum[offset++] = (byte)(rowNumber & 0xFF);
+        packetBeforeChecksum[offset++] = (byte)(rowNumber >> 8);
+        Array.Copy(data, 0, packetBeforeChecksum, offset, data.Length);
+
+        ushort checksum = CalculateChecksum(packetBeforeChecksum);
+
+        return packetBeforeChecksum
+            .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endCommand })
+            .ToArray();
+    }
+
+
     public async Task<List<FlashRow>> ReadFlashRows()
     {
         
@@ -79,53 +135,72 @@ public class PayloadProcessor
     }
 
 
-    public async Task<byte[]> GetFirmwareFlashPackets()
+    // MAIN COMBINER
+    public async Task<List<byte[]>> GetFirmwareFlashPackets()
     {
         List<FlashRow> flashRows = await ReadFlashRows();
-
-        List<byte> allPackets = new List<byte>();
+        List<byte[]> allPackets = new List<byte[]>();
 
         foreach (var row in flashRows)
         {
-            byte startCommand = 0x01;
-            byte sendDataCommand = 0x39;
-            ushort dataLength = (ushort)(row.DataLength + 3); // arrayID(1) + rowNumber(2)
-            byte arrayId = row.ArrayID;
-            ushort rowNumber = row.RowNumber;
             byte[] data = row.Data;
-            byte endCommand = 0x17;
+            int mid = data.Length;
+            //byte[] firstHalf = data.Take(mid).ToArray();
+            //byte[] secondHalf = data.Skip(mid).ToArray();
 
-            // Create packet before checksum
-            byte[] packetBeforeChecksum = new byte[1 + 1 + 2 + 1 + 2 + data.Length];
-            int offset = 0;
-            packetBeforeChecksum[offset++] = startCommand;
-            packetBeforeChecksum[offset++] = sendDataCommand;
-            packetBeforeChecksum[offset++] = (byte)(dataLength & 0xFF);
-            packetBeforeChecksum[offset++] = (byte)(dataLength >> 8);
-            packetBeforeChecksum[offset++] = arrayId;
-            packetBeforeChecksum[offset++] = (byte)(rowNumber & 0xFF);
-            packetBeforeChecksum[offset++] = (byte)(rowNumber >> 8);
-            Array.Copy(data, 0, packetBeforeChecksum, offset, data.Length);
 
-            // Calculate checksum
-            ushort checksum = CalculateChecksum(packetBeforeChecksum);
+            // SEND DATA
+            //allPackets.Add(CreateSendDataPacket(firstHalf));
 
-            // Build final packet
-            byte[] finalPacket = packetBeforeChecksum
-                .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endCommand })
-                .ToArray();
+            // PROGRAM ROW
+            allPackets.Add(CreateProgramRowPacket(row.ArrayID, row.RowNumber, data));
 
-            // Debug print
-            Console.WriteLine(string.Join("-", finalPacket.Select(b => b.ToString("X2"))));
-
-            // Add to all packets
-            allPackets.AddRange(finalPacket);
+            // VERIFY ROW
+            //allPackets.Add(CreateVerifyRowPacket(row.ArrayID, row.RowNumber));
         }
 
-        // Return all packets concatenated
-        return allPackets.ToArray();
+        // EXIT BOOTLOADER
+        allPackets.Add(CreateExitBootloader());
+
+        return allPackets;
     }
 
+    private byte[] CreateExitBootloader()
+    {
+        byte[] packet = new byte[6];
+        packet[0] = 0x01;
+        packet[1] = 0x3B;
+        packet[2] = 0x00;
+        packet[3] = 0x00;
+        packet[4] = 0xC4;
+        packet[5] = 0x17;
+        return packet;
+    }
+
+    private byte[] CreateVerifyRowPacket(byte arrayId, ushort rowNumber)
+    {
+        byte startPacket = 0x01;
+        byte command = 0x3A;
+        byte endPacket = 0x17;
+
+        // Length is 3 (arrayId + rowNumber(2)), so data length = 3
+        byte[] packetBeforeChecksum = new byte[1 + 1 + 2 + 1 + 2];
+        int offset = 0;
+        packetBeforeChecksum[offset++] = startPacket;
+        packetBeforeChecksum[offset++] = command;
+        packetBeforeChecksum[offset++] = 0x03; // length LSB
+        packetBeforeChecksum[offset++] = 0x00; // length MSB
+        packetBeforeChecksum[offset++] = arrayId;
+        packetBeforeChecksum[offset++] = (byte)(rowNumber & 0xFF);
+        packetBeforeChecksum[offset++] = (byte)(rowNumber >> 8);
+
+        ushort checksum = CalculateChecksum(packetBeforeChecksum);
+
+        // Final packet: [packetBeforeChecksum][checksum LSB][checksum MSB][endPacket]
+        return packetBeforeChecksum
+            .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endPacket })
+            .ToArray();
+    }
 
     private ushort CalculateChecksum(byte[] buffer)
     {

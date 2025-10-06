@@ -1,7 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Plugin.BLE.Abstractions.Contracts;
-using Plugin.BLE;
+using Plugin.BLE.Abstractions;
 using System.Diagnostics;
 
 namespace firmware_upgrade.Services
@@ -10,20 +10,19 @@ namespace firmware_upgrade.Services
     {
         private readonly IBluetoothLE _ble;
         private readonly IAdapter _adapter;
+        public event EventHandler<byte[]>? ResponseReceived;
 
-        public event EventHandler<byte[]> ResponseReceived;
-
-        public BleCommunicationService()
+        public BleCommunicationService(IBluetoothLE ble, IAdapter adapter)
         {
-            _ble = CrossBluetoothLE.Current;
-            _adapter = CrossBluetoothLE.Current.Adapter;
+            _ble = ble;
+            _adapter = adapter;
         }
 
         public async Task<bool> ConnectAsync(IDevice device)
         {
             try
             {
-                if (!_adapter.ConnectedDevices.Contains(device))
+                if (device.State != DeviceState.Connected)
                     await _adapter.ConnectToDeviceAsync(device);
                 return true;
             }
@@ -36,18 +35,18 @@ namespace firmware_upgrade.Services
 
         public async Task<bool> SendMessageAndListenAsync(
             IDevice device,
-            Guid serviceGuid,
-            Guid writeCharacteristicGuid,
-            Guid notifyCharacteristicGuid,
+            Guid serviceUuid,
+            Guid writeCharacteristicUuid,
+            Guid notifyCharacteristicUuid,
             byte[] message)
         {
             try
             {
-                var service = await device.GetServiceAsync(serviceGuid);
+                var service = await device.GetServiceAsync(serviceUuid);
                 if (service == null) return false;
 
-                var writeChar = await service.GetCharacteristicAsync(writeCharacteristicGuid);
-                var notifyChar = await service.GetCharacteristicAsync(notifyCharacteristicGuid);
+                var writeChar = await service.GetCharacteristicAsync(writeCharacteristicUuid);
+                var notifyChar = await service.GetCharacteristicAsync(notifyCharacteristicUuid);
 
                 if (notifyChar != null && notifyChar.CanUpdate)
                 {
@@ -73,10 +72,10 @@ namespace firmware_upgrade.Services
             }
         }
 
-        public async Task StopListeningAsync(IDevice device, Guid serviceGuid, Guid notifyCharacteristicGuid)
+        public async Task StopListeningAsync(IDevice device, Guid serviceUuid, Guid notifyCharacteristicUuid)
         {
-            var service = await device.GetServiceAsync(serviceGuid);
-            var notifyChar = await service.GetCharacteristicAsync(notifyCharacteristicGuid);
+            var service = await device.GetServiceAsync(serviceUuid);
+            var notifyChar = await service.GetCharacteristicAsync(notifyCharacteristicUuid);
             if (notifyChar != null && notifyChar.CanUpdate)
             {
                 await notifyChar.StopUpdatesAsync();
