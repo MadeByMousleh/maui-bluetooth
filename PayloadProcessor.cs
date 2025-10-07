@@ -12,13 +12,12 @@ public class PayloadProcessor
     private string _siliconRev;
     private string _checkSumType;
     private List<FlashRow> _flashDataLines;
-    private string _securityId;
+    private byte[] _securityId = [0x49, 0xA1, 0x34, 0xB6, 0xC7, 0x79];
     private string _payload;
     private string _relativePath;
 
-    public PayloadProcessor(string cypressPayload, string securityId)
+    public PayloadProcessor(string cypressPayload)
     {
-        _securityId = securityId;
         _payload = cypressPayload;
         _relativePath = _payload.Trim(); // Remove surrounding whitespace
         _header = GetHeader();

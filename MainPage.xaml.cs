@@ -1,4 +1,7 @@
-﻿using Microsoft.Maui.ApplicationModel;
+﻿using firmware_upgrade.BLE;
+using firmware_upgrade.BLEComamnds.JumpToBoot;
+using firmware_upgrade.Ota;
+using Microsoft.Maui.ApplicationModel;
 using Plugin.BLE;
 using Plugin.BLE.Abstractions;
 using Plugin.BLE.Abstractions.Contracts;
@@ -110,12 +113,6 @@ namespace firmware_upgrade
         }
 
 
-
-
-
-
-
-
         private bool _isScanningStarted = false;
 
         protected override async void OnAppearing()
@@ -146,25 +143,6 @@ namespace firmware_upgrade
             }
         }
 
-        //private void OnNotificationReceived(object sender, CharacteristicUpdatedEventArgs e)
-        //{
-        //    var data = e.Characteristic.Value;
-
-        //    lock (_lock)
-        //    {
-        //        _notificationTcs?.TrySetResult(data);
-        //    }
-        //}
-        //public async Task PrepareNotificationsAsync(ICharacteristic notifyCharacteristic)
-        //{
-        //    if (notifyCharacteristic == null || !notifyCharacteristic.CanUpdate)
-        //        throw new InvalidOperationException("Characteristic does not support notifications.");
-
-        //    notifyCharacteristic.ValueUpdated += OnNotificationReceived;
-        //    await notifyCharacteristic.StartUpdatesAsync();
-        //}
-
-
         private void OnBleStateChanged(object sender, BluetoothStateChangedArgs e)
         {
             Debug.WriteLine($"The bluetooth state changed to {e.NewState}");
@@ -191,36 +169,6 @@ namespace firmware_upgrade
             Console.WriteLine("DEVICE:" + a.Device.Id);
         }
 
-
-        //public async Task<bool> CheckBluetoothAccess()
-        //{
-        //    try
-        //    {
-        //        var requestStatus = await Permissions.CheckStatusAsync<BluetoothPermissions>();
-        //        return requestStatus == PermissionStatus.Granted;
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        Console.WriteLine($"Oops  {ex}");
-        //        return false;
-        //    }
-        //}
-
-        //public async Task<bool> RequestBluetoothAccess()
-        //{
-        //    try
-        //    {
-        //        var requestStatus = await Permissions.RequestAsync<BluetoothPermissions>();
-        //        return requestStatus == PermissionStatus.Granted;
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        Console.WriteLine($"Oops  {ex}");
-        //        return false;
-        //    }
-        //}
-
-
         private void OnConnectionClicked()
         {
 #if ANDROID
@@ -245,11 +193,6 @@ namespace firmware_upgrade
             }
 #endif
         }
-
-        // Replace the usage of BluetoothConnectPermission with the correct type from Microsoft.Maui.ApplicationModel.Permissions
-        // There is no BluetoothConnectPermission in Microsoft.Maui.ApplicationModel.Permissions by default.
-        // For Android 12+ Bluetooth permissions, you should use Permissions.Bluetooth or Permissions.BluetoothScan, Permissions.BluetoothAdvertise, and Permissions.BluetoothConnect if available.
-        // However, in .NET MAUI, only Permissions.Bluetooth is available by default.
 
         private async Task<bool> CheckAndRequestBluetoothPermissions()
         {
@@ -280,7 +223,6 @@ namespace firmware_upgrade
 
         private async void OnConnectClicked(BLEDevice device)
         {
-            Console.WriteLine(device.Name + "XXXXXXXXXXXXXXXXX");
 
             try
             {
@@ -289,14 +231,14 @@ namespace firmware_upgrade
 
                 await ConnectAndGetMtuAsync(device.BaseDevice);
 
-                bool isInSensorBoot = await IsDeviceInSensorBootMode(adapter.ConnectedDevices[0]);
+                //bool isInSensorBoot = await IsDeviceInSensorBootMode(adapter.ConnectedDevices[0]);
 
-                if (isInSensorBoot)
-                {
+                //if (isInSensorBoot)
+                //{
 
-                    return;
+                //    return;
 
-                }
+                //}
 
 
                 var service = await adapter.ConnectedDevices[0].GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
@@ -307,16 +249,20 @@ namespace firmware_upgrade
 
 
 
-                byte[] loginBytes = new byte[]
-                {
-                    0x01,       // Protocol Version
-                    0x10, 0x00, // Telegram Type (0x0010)
-                    0x09, 0x00, // Total Length (0x0009)
-                    0xFB, 0x95, // CRC16 (0x95FB)
-                    0x1D, 0x01  // Login Value (0x011D = 285)
-                };
+                //byte[] loginBytes = new byte[]
+                //{
+                //    0x01,       // Protocol Version
+                //    0x10, 0x00, // Telegram Type (0x0010)
+                //    0x09, 0x00, // Total Length (0x0009)
+                //    0xFB, 0x95, // CRC16 (0x95FB)
+                //    0x1D, 0x01  // Login Value (0x011D = 285)
+                //};
 
-                await writeCharacteristic.WriteAsync(loginBytes);
+                LoginRequest request = new LoginRequest();
+                byte[] command = request.Create();
+                
+
+                await writeCharacteristic.WriteAsync(command);
 
                 //DFUController dfuController = new DFUController("",);
 
@@ -344,7 +290,15 @@ namespace firmware_upgrade
                     {
                         var data = e.Characteristic.Value; // byte []
                         // Handle the notification data here
-                        Console.WriteLine("Notification received: " + BitConverter.ToString(data));
+                        //Console.WriteLine("Notification received: " + BitConverter.ToString(data));
+
+                        var reply = BLEParser.Parse(data);
+
+                        if(reply.IsAck())
+                        {
+                            Console.WriteLine("Notification received: " + reply.ToString());
+                        }
+
                     };
 
                     await notifyCharacteristic.StartUpdatesAsync();
@@ -412,12 +366,7 @@ namespace firmware_upgrade
 
         }
 
-
-
-        // Write a packet and wait for the notification response for that single write.
-        // Uses per-call event handler and unsubscribes afterwards.
-        // Assumes the device sends its response as a notification on the same characteristic.
-        public async Task WriteBootPackets(ICharacteristic writeCharacteristic, byte[] bytes, int timeoutMs = 5000)
+        public async Task WriteBootPackets(ICharacteristic writeCharacteristic, byte[] bytes)
         {
             if (writeCharacteristic == null) throw new ArgumentNullException(nameof(writeCharacteristic));
 
@@ -425,7 +374,6 @@ namespace firmware_upgrade
 
         }
 
-        // Use the same characteristic you pass into StartDFU:
         public async Task EnterBootLoader(ICharacteristic characteristic)
         {
             byte[] enterBootloaderBytes = new byte[]
@@ -452,15 +400,12 @@ namespace firmware_upgrade
 
 
         }
-
-        // Send a single DFU packet using the provided characteristic.
-        // IMPORTANT: this no longer increments RowReachedCount.
+ 
         public async Task SendBootLoaderPacket(ICharacteristic writeCharacteristic, byte[] packet)
         {
             await WriteBootPackets(writeCharacteristic, packet);
 
         }
-
 
         public async Task ConnectAndGetMtuAsync(IDevice device)
         {
@@ -492,34 +437,7 @@ namespace firmware_upgrade
         {
             string relativePath = "firmwares/P46/0225/353BL10602.cyacd";
 
-            await EnterBootLoader(characteristic);
-          
-
-            await GetFlashSize(characteristic);
-      
-
-            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
-            List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
-
-            RowsToBeProgrammed = flashRows.Count;
-            RowReachedCount = 0;
-
-            for (int i = 0; i < flashRows.Count -1; i++)
-            {
-                var rowPacket = flashRows[i];
-                await SendBootLoaderPacket(characteristic, rowPacket);
-         
-                // UI update on main thread
-                await MainThread.InvokeOnMainThreadAsync(() =>
-                {
-                    RowReachedCount++;
-                });
-
-                Console.WriteLine($"ROW {i + 1}/{flashRows.Count} SENT AND ACKNOWLEDGED");
-            }
-
-            Console.WriteLine("✅ DFU completed successfully.");
-            return true;
+            BootloaderUpgrade bootloaderUpgrade = BootloaderUpgrade.Init(relativePath, false, WriteBootPackets, characteristic);
         }
 
         public async Task<bool> UpgradeSensor(ICharacteristic characteristic)
