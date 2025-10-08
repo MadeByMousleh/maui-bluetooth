@@ -155,7 +155,7 @@ public class PayloadProcessor
             allPackets.Add(CreateProgramRowPacket(row.ArrayID, row.RowNumber, data));
 
             // VERIFY ROW
-            //allPackets.Add(CreateVerifyRowPacket(row.ArrayID, row.RowNumber));
+            allPackets.Add(CreateVerifyRowPacket(row.ArrayID, row.RowNumber));
         }
 
         // EXIT BOOTLOADER
