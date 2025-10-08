@@ -253,15 +253,11 @@ namespace firmware_upgrade
 
         private async void OnStartBootloaderUprade(BLEDevice device, int retry = 0)
         {
-            int timesTried = 0;
 
-            if (retry > 5) return;
-            // 1. Check if device is connected
 
             if (device.BaseDevice.State != DeviceState.Connected)
             {
                 await ConnectToDevice(device);
-                OnStartBootloaderUprade(device, timesTried++);
             }
 
             bool isInBootMode = await IsDeviceInSensorBootMode(device);
@@ -269,10 +265,13 @@ namespace firmware_upgrade
             if(!isInBootMode)
             {
                 await WriteToBootApplication(device, new JumpToBootRequest(), false);
-                timesTried++;
             }
 
-            await UpgradeBootloader(device);
+            if (isInBootMode && device.BaseDevice.State == DeviceState.Connected)
+            {
+                await UpgradeBootloader(device);
+
+            }
             // 3. Start upgrade of the bootloader
         }
 
@@ -441,8 +440,9 @@ namespace firmware_upgrade
                 throw new Exception("WRITE CHAR CANNOT WRITE");
             }
 
-            string relativePath = "firmwares/P46/0225/353BL10602.cyacd";
+            string relativePath = "firmwares/P46/0225/353AP30225.cyacd";
             var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, false);
+
 
             // 🔹 Notification handler (async-safe)
             writeCharacteristic.ValueUpdated += (s, e) =>
@@ -462,6 +462,8 @@ namespace firmware_upgrade
                 });
             };
 
+            await writeCharacteristic.StartUpdatesAsync();
+
             // 🔹 BLE write handler
             bootloader.OnDataToWrite += async (sender, data) =>
             {
@@ -471,9 +473,12 @@ namespace firmware_upgrade
             // 🔹 Progress UI
             bootloader.OnProgressChanged += (sender, rowCount) =>
             {
-                RowReachedCount = rowCount;
+               
+                UpgradeProgress = rowCount;
+                Console.WriteLine($"[DOTNET] Progress: {rowCount}%");
 
-                Console.WriteLine($"Progress: {rowCount}/{bootloader.RowsToBeProgrammed}");
+
+                //Console.WriteLine($"Progress: {rowCount}/{bootloader.RowsToBeProgrammed}");
             };
 
             await bootloader.StartDFU();

@@ -24,9 +24,7 @@ namespace firmware_upgrade.Ota
         /// </summary>
         public event Func<byte[], Task<bool>>? OnDataToWriteRequest;
 
-        /// <summary>
-        /// Fired when a new row has been successfully acknowledged.
-        /// </summary>
+        
         public event EventHandler<int>? OnProgressChanged;
 
 
@@ -53,7 +51,7 @@ namespace firmware_upgrade.Ota
             instance.flashRows = new List<byte[]>();
 
             rows.Add(GetEnterBootloaderPacket());
-            rows.Add(GetFlashSizePacket());
+            //rows.Add(GetFlashSizePacket());
 
             instance.flashRows = await instance.payloadProcessor.GetFirmwareFlashPackets();
             rows.AddRange(instance.flashRows);
@@ -73,11 +71,6 @@ namespace firmware_upgrade.Ota
             {
                 RowReachedCount++;
                 CurrentRowIndex++;
-
-                await MainThread.InvokeOnMainThreadAsync(() =>
-                {
-                    OnProgressChanged?.Invoke(this, RowReachedCount);
-                });
 
                 await SendNextRow();
             }
@@ -107,12 +100,16 @@ namespace firmware_upgrade.Ota
 
             var rowPacket = flashRows[CurrentRowIndex];
 
+            Console.WriteLine($"📦 Sending Row {CurrentRowIndex}: {BitConverter.ToString(rowPacket)}");
+
             OnDataToWrite?.Invoke(this, rowPacket);
 
+            int percent = (int)(((double)RowReachedCount / RowsToBeProgrammed) * 100);
 
             await MainThread.InvokeOnMainThreadAsync(() =>
             {
-                OnProgressChanged?.Invoke(this, RowReachedCount);
+
+                OnProgressChanged?.Invoke(this, percent);
             });
 
             Console.WriteLine($"✅ Row {RowReachedCount}/{RowsToBeProgrammed} acknowledged");
