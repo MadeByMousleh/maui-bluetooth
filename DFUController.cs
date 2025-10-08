@@ -21,7 +21,7 @@ public class DFUController
         _payload = payload;
         _writeMethod = writeMethod;
         _bleDevice = bleDevice;
-        _processor = new PayloadProcessor(_payload, _securityId);
+        _processor = new PayloadProcessor(_payload);
         //_rows = _processor.GetFlashDataLines();
     }
 
@@ -71,7 +71,7 @@ public class DFUController
     private void EnterBootLoader()
     {
         var packetGen = new BootLoaderPacketGen();
-        var packet = packetGen.EnterBootLoader(_processor.GetSecurityId());
+        var packet = packetGen.EnterBootLoader();
         _writeMethod(packet, _bleDevice);
         _currentStep = 2;
     }

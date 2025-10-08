@@ -1,13 +1,15 @@
 ﻿
+using firmware_upgrade.BLEComamnds.Interfaces;
+
 namespace firmware_upgrade.BLEComamnds.JumpToBoot
 {
 
-    public enum JumpToBootPayload
+    public enum JumpToBootPayload : byte
     {
         Sensor = 0x01,
         Actor = 0x02
     }
-    public class JumpToBootRequest
+    public class JumpToBootRequest: IRequest
     {
         private byte[] _command = new byte[8];
 

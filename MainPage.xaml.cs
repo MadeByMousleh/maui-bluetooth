@@ -1,4 +1,5 @@
 ﻿using firmware_upgrade.BLE;
+using firmware_upgrade.BLEComamnds.Interfaces;
 using firmware_upgrade.BLEComamnds.JumpToBoot;
 using firmware_upgrade.Ota;
 using Microsoft.Maui.ApplicationModel;
@@ -91,14 +92,12 @@ namespace firmware_upgrade
         public ICommand connectCommand;
         public ICommand ConnectCommand => new Command<BLEDevice>(OnConnectClicked);
 
+
+        public ICommand OnStartBootloaderUpradeCommand => new Command<BLEDevice>(device => OnStartBootloaderUprade(device));
+
         public IBluetoothLE ble { get; set; }
         public IAdapter adapter { get; set; }
 
-
-
-
-
-        //private TaskCompletionSource<byte[]> _notificationTcs;
 
         private object _lock = new();
 
@@ -223,110 +222,65 @@ namespace firmware_upgrade
 
         private async void OnConnectClicked(BLEDevice device)
         {
+            await ConnectToDevice(device);
+        }
 
+        private async Task<bool> ConnectToDevice(BLEDevice device)
+        {
             try
             {
 
+
+                bool isInSensorBoot = await IsDeviceInSensorBootMode(device);
+
+                if (isInSensorBoot && device.BaseDevice.State == DeviceState.Connected)
+                {
+                    await RequestMTU(device.BaseDevice);
+                    device.IsConnected = true;
+                    return true;
+                }
+
                 await adapter.ConnectToDeviceAsync(device.BaseDevice);
 
-                await ConnectAndGetMtuAsync(device.BaseDevice);
-
-                //bool isInSensorBoot = await IsDeviceInSensorBootMode(adapter.ConnectedDevices[0]);
-
-                //if (isInSensorBoot)
-                //{
-
-                //    return;
-
-                //}
-
-
-                var service = await adapter.ConnectedDevices[0].GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
-
-                var characteristics = await service.GetCharacteristicsAsync();
-
-                var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
-
-
-
-                //byte[] loginBytes = new byte[]
-                //{
-                //    0x01,       // Protocol Version
-                //    0x10, 0x00, // Telegram Type (0x0010)
-                //    0x09, 0x00, // Total Length (0x0009)
-                //    0xFB, 0x95, // CRC16 (0x95FB)
-                //    0x1D, 0x01  // Login Value (0x011D = 285)
-                //};
-
-                LoginRequest request = new LoginRequest();
-                byte[] command = request.Create();
-                
-
-                await writeCharacteristic.WriteAsync(command);
-
-                //DFUController dfuController = new DFUController("",);
-
-
-
-                // 0003cdd2-0000-1000-8000-00805f9b0131 Write charcchteristic
-
-                foreach (var c in characteristics)
-                {
-                    Console.WriteLine($"CHARS: " +
-                        $"Id:{c.Id} " +
-                        $"\n\n UUID: {c.Uuid} " +
-                        $"\n\n Can read?: {c.CanRead} " +
-                        $"\n\n Can write?: {c.CanWrite} " +
-                        $"\n\n Can update?: {c.CanUpdate}"
-                        );
-                }
-
-                // Assuming 'service' is your IDevice's service instance
-                var notifyCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
-
-                if (notifyCharacteristic != null && notifyCharacteristic.CanUpdate)
-                {
-                    notifyCharacteristic.ValueUpdated += (s, e) =>
-                    {
-                        var data = e.Characteristic.Value; // byte []
-                        // Handle the notification data here
-                        //Console.WriteLine("Notification received: " + BitConverter.ToString(data));
-
-                        var reply = BLEParser.Parse(data);
-
-                        if(reply.IsAck())
-                        {
-                            Console.WriteLine("Notification received: " + reply.ToString());
-                        }
-
-                    };
-
-                    await notifyCharacteristic.StartUpdatesAsync();
-                }
-
+                return await WriteToBootApplication(device, new LoginRequest(), true);
             }
-            catch (DeviceConnectionException e)
+            catch (Exception e)
             {
-                // ... could not connect to device
+                Console.WriteLine("ERROR" + e.Message.ToString());
+                return false;
             }
         }
 
-        public async Task<bool> IsDeviceInSensorBootMode(IDevice connectedDevice)
+        private async void OnStartBootloaderUprade(BLEDevice device, int retry = 0)
         {
-            var service = await connectedDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
+            int timesTried = 0;
 
-            var allCharachterstics = await service.GetCharacteristicsAsync();
+            if (retry > 5) return;
+            // 1. Check if device is connected
 
-            foreach (var c in allCharachterstics)
+            if (device.BaseDevice.State != DeviceState.Connected)
             {
-                Console.WriteLine($"CHARS: " +
-                    $"Id:{c.Id} " +
-                    $"\n\n UUID: {c.Uuid} " +
-                    $"\n\n Can read?: {c.CanRead} " +
-                    $"\n\n Can write?: {c.CanWrite} " +
-                    $"\n\n Can update?: {c.CanUpdate}"
-                    );
+                await ConnectToDevice(device);
+                OnStartBootloaderUprade(device, timesTried++);
             }
+
+            bool isInBootMode = await IsDeviceInSensorBootMode(device);
+
+            if(!isInBootMode)
+            {
+                await WriteToBootApplication(device, new JumpToBootRequest(), false);
+                timesTried++;
+            }
+
+            await UpgradeBootloader(device);
+            // 3. Start upgrade of the bootloader
+        }
+
+        public async Task<bool> IsDeviceInSensorBootMode(BLEDevice device)
+        {
+            await adapter.ConnectToDeviceAsync(device.BaseDevice);
+
+            var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
 
             if (service == null)
             {
@@ -334,38 +288,83 @@ namespace firmware_upgrade
                 return false;
             }
 
-            if (service != null)
-            {
-                Console.WriteLine("SERVICE IS NOT NULL");
-                Console.WriteLine($"SERVICE: {service.Id}");
-
-                var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
-
-                if (writeCharacteristic == null)
-                {
-                    return false;
-                }
-
-
-                if (writeCharacteristic != null)
-                {
-                    Console.WriteLine($"BOOOT: {writeCharacteristic.Uuid} - {writeCharacteristic.CanWrite}");
-                    bool isDone = await UpgradeBootloader(writeCharacteristic);
-                    if (isDone)
-                    {
-                        await UpgradeSensor(writeCharacteristic);
-                    }
-                    //await UpgradeSensor(writeCharacteristic);
-
-                    return true;
-                }
-
-            }
-
-            return false;
-
+            return true;
         }
 
+        private async Task<bool> WriteToBootApplication(BLEDevice device, IRequest request, bool hasReply)
+        {
+
+            var ackReceivedTcs = new TaskCompletionSource<bool>();
+
+            var service = await device.BaseDevice
+                   .GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
+
+            var writeCharacteristic = await service
+                .GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
+
+            var notifyCharacteristic = await service
+                .GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
+
+            if (notifyCharacteristic == null || !notifyCharacteristic.CanUpdate)
+            {
+                Console.WriteLine("⚠️ Notification characteristic not available.");
+                ackReceivedTcs.SetResult(false);
+                return false;
+            }
+
+            notifyCharacteristic.ValueUpdated += (s, e) =>
+            {
+                try
+                {
+                    var data = e.Characteristic.Value;
+                    var reply = BLEParser.Parse(data);
+
+                    if (reply.IsAck() && device.BaseDevice.State == DeviceState.Connected)
+                    {
+                        ackReceivedTcs.SetResult(true);
+
+                        Console.WriteLine("✅ ACK received from device!");
+                    }
+                    else
+                    {
+                        ackReceivedTcs.SetResult(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"⚠️ Error parsing response: {ex.Message}");
+                }
+            };
+
+            if (hasReply)
+            {
+
+                await notifyCharacteristic.StartUpdatesAsync();
+            }
+
+            byte[] command = request.Create();
+
+            await writeCharacteristic.WriteAsync(command);
+
+            var completedTask = await Task.WhenAny(ackReceivedTcs.Task, Task.Delay(10000));
+
+            if (!hasReply)
+            {
+                return true;
+            }
+
+            if (completedTask == ackReceivedTcs.Task)
+            {
+                return ackReceivedTcs.Task.Result;
+            }
+            else
+            {
+                Console.WriteLine("❌ Timeout waiting for ACK");
+                return false;
+            }
+
+        }
+ 
         public async Task WriteBootPackets(ICharacteristic writeCharacteristic, byte[] bytes)
         {
             if (writeCharacteristic == null) throw new ArgumentNullException(nameof(writeCharacteristic));
@@ -400,28 +399,26 @@ namespace firmware_upgrade
 
 
         }
- 
+
         public async Task SendBootLoaderPacket(ICharacteristic writeCharacteristic, byte[] packet)
         {
             await WriteBootPackets(writeCharacteristic, packet);
 
         }
 
-        public async Task ConnectAndGetMtuAsync(IDevice device)
+        public async Task RequestMTU(IDevice device)
         {
             try
             {
 
 #if ANDROID
-            // Request a specific MTU size (Android only)
-            int requestedMtu = 270;
-            int negotiatedMtu = await device.RequestMtuAsync(requestedMtu);
-            Console.WriteLine($"Negotiated MTU: {negotiatedMtu}");
-
-            // Use `negotiatedMtu` as the current MTU
+                int requestedMtu = 270;
+                int negotiatedMtu = await device.RequestMtuAsync(requestedMtu);
+                Console.WriteLine($"Negotiated MTU: {negotiatedMtu}");
 #else
                 Console.WriteLine("MTU negotiation is not supported on this platform (likely iOS)");
 #endif
+
             }
             catch (DeviceConnectionException ex)
             {
@@ -433,11 +430,53 @@ namespace firmware_upgrade
             }
         }
 
-        public async Task<bool> UpgradeBootloader(ICharacteristic characteristic)
+        public async Task UpgradeBootloader(BLEDevice device)
         {
-            string relativePath = "firmwares/P46/0225/353BL10602.cyacd";
+            var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
+            var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
 
-            BootloaderUpgrade bootloaderUpgrade = BootloaderUpgrade.Init(relativePath, false, WriteBootPackets, characteristic);
+            if (writeCharacteristic == null || !writeCharacteristic.CanWrite)
+            {
+                Console.WriteLine("⚠️ Write characteristic not available.");
+                throw new Exception("WRITE CHAR CANNOT WRITE");
+            }
+
+            string relativePath = "firmwares/P46/0225/353BL10602.cyacd";
+            var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, false);
+
+            // 🔹 Notification handler (async-safe)
+            writeCharacteristic.ValueUpdated += (s, e) =>
+            {
+                var data = e.Characteristic.Value;
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await bootloader.HandleResponse(data);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error parsing response: {ex.Message}");
+                    }
+                });
+            };
+
+            // 🔹 BLE write handler
+            bootloader.OnDataToWrite += async (sender, data) =>
+            {
+                await WriteBootPackets(writeCharacteristic, data);
+            };
+
+            // 🔹 Progress UI
+            bootloader.OnProgressChanged += (sender, rowCount) =>
+            {
+                RowReachedCount = rowCount;
+
+                Console.WriteLine($"Progress: {rowCount}/{bootloader.RowsToBeProgrammed}");
+            };
+
+            await bootloader.StartDFU();
         }
 
         public async Task<bool> UpgradeSensor(ICharacteristic characteristic)
@@ -446,7 +485,7 @@ namespace firmware_upgrade
 
             await GetFlashSize(characteristic);
 
-            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
+            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath);
             List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
 
             RowsToBeProgrammed = flashRows.Count;
@@ -470,19 +509,18 @@ namespace firmware_upgrade
             return true;
         }
 
-
         public async Task StartDFU(ICharacteristic characteristic, int firmwareType = 0)
         {
 
             string relativePath = "firmwares/P48/0227/353AP30227.cyacd";
 
-                await EnterBootLoader(characteristic);
+            await EnterBootLoader(characteristic);
 
-                await GetFlashSize(characteristic);
+            await GetFlashSize(characteristic);
 
-                relativePath = "firmwares/P48/0227/353AP30227.cyacd";
-        
-            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, "49A134B6C779");
+            relativePath = "firmwares/P48/0227/353AP30227.cyacd";
+
+            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath);
 
             List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
 
@@ -503,7 +541,7 @@ namespace firmware_upgrade
                 {
                     RowReachedCount++; // property setter will update UpgradeProgress
 
-    
+
                 });
 
                 Console.WriteLine("ROW SENT AND ACKNOWLEDGED");

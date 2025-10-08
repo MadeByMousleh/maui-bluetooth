@@ -12,7 +12,7 @@
                 HeightRequest="185"
                 SemanticProperties.Description="dot net bot in a hovercraft number nine"
                 Source="dotnet_bot.png" />
-           
+
 
             <Label
                 SemanticProperties.HeadingLevel="Level1"
@@ -25,8 +25,7 @@
                 Style="{StaticResource SubHeadline}"
                 Text="Welcome to &#10;.NET Multi-platform App UI" />
 
-            <Label Text="Upgrade Progress:"
-                   FontAttributes="Bold" />
+            <Label FontAttributes="Bold" Text="Upgrade Progress:" />
             <ProgressBar Progress="{Binding UpgradeProgress, Converter={StaticResource PercentToDoubleConverter}}" />
             <Label Text="{Binding UpgradeProgress, StringFormat='Progress: {0}%'}" />
 
@@ -46,8 +45,13 @@
                                 Command="{Binding BindingContext.ConnectCommand, Source={x:Reference PageRef}}"
                                 CommandParameter="{Binding .}"
                                 Text="Connect" />
-                            
-                            
+
+                            <Button
+                                Command="{Binding BindingContext.OnStartBootloaderUpradeCommand, Source={x:Reference PageRef}}"
+                                CommandParameter="{Binding .}"
+                                Text="Upgrade bootloader" />
+
+
                         </StackLayout>
                     </DataTemplate>
                 </CollectionView.ItemTemplate>

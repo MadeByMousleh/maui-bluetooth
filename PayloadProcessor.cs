@@ -215,7 +215,7 @@ public class PayloadProcessor
 
 
     // Getters
-    public string GetSecurityId() => _securityId;
+    public byte[] GetSecurityId() => _securityId;
 
     public async Task<List<FlashRow>> GetFlashDataLines()
     {
