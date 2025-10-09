@@ -11,7 +11,7 @@ namespace firmware_upgrade.Ota
         public string FilePath { get; private set; }
         public bool SecureUpgrade { get; private set; }
 
-        private List<byte[]> flashRows;
+        private List<byte[]>? flashRows;
 
         public int RowsToBeProgrammed { get; private set; }
         public int RowReachedCount { get; private set; }
@@ -45,18 +45,10 @@ namespace firmware_upgrade.Ota
         public static async Task<BootloaderUpgrade> CreateAsync(string filePath, bool secureUpgrade)
         {
             var instance = new BootloaderUpgrade(filePath, secureUpgrade);
-           
-            List<byte[]> rows = new List<byte[]>();
 
-            instance.flashRows = new List<byte[]>();
+            instance.flashRows = await instance.InitRows();
 
-            rows.Add(GetEnterBootloaderPacket());
-            //rows.Add(GetFlashSizePacket());
-
-            instance.flashRows = await instance.payloadProcessor.GetFirmwareFlashPackets();
-            rows.AddRange(instance.flashRows);
-            instance.flashRows = rows;
-            instance.RowsToBeProgrammed = instance.flashRows.Count;
+            instance.RowsToBeProgrammed = instance.flashRows.Count -1;
             instance.RowReachedCount = 0;
             instance.CurrentRowIndex = 0;
             return instance;
@@ -81,6 +73,21 @@ namespace firmware_upgrade.Ota
         }
 
 
+        private async Task<List<byte[]>> InitRows()
+        {
+            List<byte[]> rows = new List<byte[]>();
+
+            rows.Add(GetEnterBootloaderPacket());
+            rows.Add(GetFlashSizePacket());
+
+            List<byte[]> commands = await payloadProcessor.GetFirmwareFlashPackets();
+
+            rows.AddRange(commands);
+
+            return rows;
+
+
+        }
         public async Task StartDFU()
         {
 
@@ -127,9 +134,11 @@ namespace firmware_upgrade.Ota
 
         public static byte[] GetFlashSizePacket() => new byte[]
         {
-            0x01, 0x32, 0x06, 0x01,
-            0x00, 0x00, 0xCC, 0xFF,
+            0x01, 0x32, 0x01, 0x00,
+            0x00,  0xCC, 0xFF,
             0x17
         };
+
+
     }
 }

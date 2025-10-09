@@ -17,21 +17,64 @@ using System.Windows.Input;
 namespace firmware_upgrade
 {
 
-    public class BLEDevice
+    public class BLEDevice : INotifyPropertyChanged
     {
-        public string Name
-        {
-            get;
+        public event PropertyChangedEventHandler PropertyChanged;
 
-            set;
+        protected void OnPropertyChanged([CallerMemberName] string propertyName = "")
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
+
+        public string Name { get; set; }
+
+        public string Id => BaseDevice?.Id.ToString() ?? "Unknown";
 
         public IDevice BaseDevice { get; set; }
 
-        public bool IsConnected { get; set; } = false;
+        private bool _isConnected = false;
+        public bool IsConnected
+        {
+            get => _isConnected;
+            set
+            {
+                if (_isConnected != value)
+                {
+                    _isConnected = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
 
+        private int _upgradeProgress = 0;
+        public int UpgradeProgress
+        {
+            get => _upgradeProgress;
+            set
+            {
+                if (_upgradeProgress != value)
+                {
+                    _upgradeProgress = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
 
+        private bool _isUpgradeInProgress = false;
+        public bool IsUpgradeInProgress
+        {
+            get => _isUpgradeInProgress;
+            set
+            {
+                if (_isUpgradeInProgress != value)
+                {
+                    _isUpgradeInProgress = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
     }
+
     public partial class MainPage : ContentPage, INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
@@ -41,9 +84,21 @@ namespace firmware_upgrade
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
-
         public ObservableCollection<BLEDevice> Devices { get; set; } = new();
 
+        private BLEDevice _selectedDevice;
+        public BLEDevice SelectedDevice
+        {
+            get => _selectedDevice;
+            set
+            {
+                if (_selectedDevice != value)
+                {
+                    _selectedDevice = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
 
         private int _upgradeProgress;
         public int UpgradeProgress
@@ -92,12 +147,16 @@ namespace firmware_upgrade
         public ICommand connectCommand;
         public ICommand ConnectCommand => new Command<BLEDevice>(OnConnectClicked);
 
-
         public ICommand OnStartBootloaderUpradeCommand => new Command<BLEDevice>(device => OnStartBootloaderUprade(device));
+
+        public ICommand GetDeviceInfoCommand => new Command<BLEDevice>(OnGetDeviceInfo);
+
+        public ICommand GetSoftwareVersionCommand => new Command<BLEDevice>(OnGetSoftwareVersion);
+
+        public ICommand GetDeviceDetailsCommand => new Command<BLEDevice>(OnGetDeviceDetails);
 
         public IBluetoothLE ble { get; set; }
         public IAdapter adapter { get; set; }
-
 
         private object _lock = new();
 
@@ -111,6 +170,56 @@ namespace firmware_upgrade
             BindingContext = this;
         }
 
+        // Menu functionality
+        private void OnMenuButtonClicked(object sender, EventArgs e)
+        {
+            if (sender is Button button && button.CommandParameter is BLEDevice device)
+            {
+                SelectedDevice = device;
+                ShowMenu();
+            }
+        }
+
+        private void ShowMenu()
+        {
+            MenuOverlay.IsVisible = true;
+            MenuPopup.IsVisible = true;
+        }
+
+        private void HideMenu()
+        {
+            MenuOverlay.IsVisible = false;
+            MenuPopup.IsVisible = false;
+        }
+
+        private void OnOverlayTapped(object sender, EventArgs e)
+        {
+            HideMenu();
+        }
+
+        private async void OnGetDeviceInfo(BLEDevice device)
+        {
+            HideMenu();
+            await DisplayAlert("Device Info", $"Device: {device.Name}\nID: {device.Id}\nConnected: {device.IsConnected}", "OK");
+        }
+
+        private async void OnGetSoftwareVersion(BLEDevice device)
+        {
+            HideMenu();
+            // TODO: Implement get software version functionality
+            await DisplayAlert("Software Version", "Getting software version... (Not implemented yet)", "OK");
+        }
+
+        private async void OnGetDeviceDetails(BLEDevice device)
+        {
+            HideMenu();
+            var details = $"Device Name: {device.Name}\n" +
+                         $"Device ID: {device.Id}\n" +
+                         $"Connection State: {device.BaseDevice?.State}\n" +
+                         $"Is Connected: {device.IsConnected}";
+            
+            await DisplayAlert("Device Details", details, "OK");
+        }
 
         private bool _isScanningStarted = false;
 
@@ -222,43 +331,96 @@ namespace firmware_upgrade
 
         private async void OnConnectClicked(BLEDevice device)
         {
-            await ConnectToDevice(device);
+            if (device.IsConnected)
+            {
+                await DisconnectFromDevice(device);
+            }
+            else
+            {
+                await ConnectToDevice(device);
+            }
+        }
+
+        private async Task DisconnectFromDevice(BLEDevice device)
+        {
+            try
+            {
+                if (device.BaseDevice.State == DeviceState.Connected)
+                {
+                    await adapter.DisconnectDeviceAsync(device.BaseDevice);
+                }
+                
+                await MainThread.InvokeOnMainThreadAsync(() =>
+                {
+                    device.IsConnected = false;
+                    device.IsUpgradeInProgress = false;
+                    device.UpgradeProgress = 0;
+                });
+
+                Console.WriteLine($"✅ Disconnected from device: {device.Name}");
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"❌ Error disconnecting from device: {e.Message}");
+                await DisplayAlert("Error", $"Failed to disconnect: {e.Message}", "OK");
+            }
         }
 
         private async Task<bool> ConnectToDevice(BLEDevice device)
         {
             try
             {
-
-
                 bool isInSensorBoot = await IsDeviceInSensorBootMode(device);
 
                 if (isInSensorBoot && device.BaseDevice.State == DeviceState.Connected)
                 {
                     await RequestMTU(device.BaseDevice);
-                    device.IsConnected = true;
+                    await MainThread.InvokeOnMainThreadAsync(() =>
+                    {
+                        device.IsConnected = true;
+                    });
                     return true;
                 }
 
                 await adapter.ConnectToDeviceAsync(device.BaseDevice);
 
-                return await WriteToBootApplication(device, new LoginRequest(), true);
+                bool loginSuccess = await WriteToBootApplication(device, new LoginRequest(), true);
+                
+                await MainThread.InvokeOnMainThreadAsync(() =>
+                {
+                    device.IsConnected = loginSuccess;
+                });
+
+                return loginSuccess;
             }
             catch (Exception e)
             {
                 Console.WriteLine("ERROR" + e.Message.ToString());
+                await DisplayAlert("Connection Error", $"Failed to connect to {device.Name}: {e.Message}", "OK");
                 return false;
             }
         }
 
         private async void OnStartBootloaderUprade(BLEDevice device, int retry = 0)
         {
-
+            HideMenu(); // Hide menu when starting upgrade
 
             if (device.BaseDevice.State != DeviceState.Connected)
             {
-                await ConnectToDevice(device);
+                bool connected = await ConnectToDevice(device);
+                if (!connected)
+                {
+                    await DisplayAlert("Error", "Failed to connect to device before upgrade", "OK");
+                    return;
+                }
             }
+
+            // Set upgrade in progress
+            await MainThread.InvokeOnMainThreadAsync(() =>
+            {
+                device.IsUpgradeInProgress = true;
+                device.UpgradeProgress = 0;
+            });
 
             bool isInBootMode = await IsDeviceInSensorBootMode(device);
 
@@ -270,9 +432,7 @@ namespace firmware_upgrade
             if (isInBootMode && device.BaseDevice.State == DeviceState.Connected)
             {
                 await UpgradeBootloader(device);
-
             }
-            // 3. Start upgrade of the bootloader
         }
 
         public async Task<bool> IsDeviceInSensorBootMode(BLEDevice device)
@@ -443,7 +603,6 @@ namespace firmware_upgrade
             string relativePath = "firmwares/P46/0225/353AP30225.cyacd";
             var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, false);
 
-
             // 🔹 Notification handler (async-safe)
             writeCharacteristic.ValueUpdated += (s, e) =>
             {
@@ -470,15 +629,21 @@ namespace firmware_upgrade
                 await WriteBootPackets(writeCharacteristic, data);
             };
 
-            // 🔹 Progress UI
+            // 🔹 Progress UI - Update individual device progress
             bootloader.OnProgressChanged += (sender, rowCount) =>
             {
-               
-                UpgradeProgress = rowCount;
-                Console.WriteLine($"[DOTNET] Progress: {rowCount}%");
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    device.UpgradeProgress = rowCount;
+                    
+                    // If upgrade is complete
+                    if (rowCount >= 100)
+                    {
+                        device.IsUpgradeInProgress = false;
+                    }
+                });
 
-
-                //Console.WriteLine($"Progress: {rowCount}/{bootloader.RowsToBeProgrammed}");
+                Console.WriteLine($"[DOTNET] Progress for {device.Name}: {rowCount}%");
             };
 
             await bootloader.StartDFU();

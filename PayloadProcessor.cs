@@ -95,42 +95,42 @@ public class PayloadProcessor
 
     public async Task<List<FlashRow>> ReadFlashRows()
     {
-        
-            // Use the relative path under Raw/
-            using var stream = await FileSystem.OpenAppPackageFileAsync(_relativePath);
-            using var reader = new StreamReader(stream);
 
-            var rows = new List<FlashRow>();
+        // Use the relative path under Raw/
+        using var stream = await FileSystem.OpenAppPackageFileAsync(_relativePath);
+        using var reader = new StreamReader(stream);
 
-            while (!reader.EndOfStream)
+        var rows = new List<FlashRow>();
+
+        while (!reader.EndOfStream)
+        {
+            var line = await reader.ReadLineAsync();
+            if (string.IsNullOrWhiteSpace(line) || line.Length < 13 || !line.StartsWith(":"))
+                continue;
+
+            try
             {
-                var line = await reader.ReadLineAsync();
-                if (string.IsNullOrWhiteSpace(line) || line.Length < 13 || !line.StartsWith(":"))
-                    continue;
-
-                try
-                {
-                    byte arrayID = Convert.ToByte(line.Substring(1, 2), 16);
-                    ushort rowNumber = Convert.ToUInt16(line.Substring(3, 4), 16);
-                    ushort dataLength = Convert.ToUInt16(line.Substring(7, 4), 16);
-                    string dataHex = line.Substring(11, line.Length - 13);
-                    byte[] data = Enumerable.Range(0, dataHex.Length / 2)
-                        .Select(x => Convert.ToByte(dataHex.Substring(x * 2, 2), 16))
-                        .ToArray();
-                    byte checksum = Convert.ToByte(line.Substring(line.Length - 2, 2), 16);
+                byte arrayID = Convert.ToByte(line.Substring(1, 2), 16);
+                ushort rowNumber = Convert.ToUInt16(line.Substring(3, 4), 16);
+                ushort dataLength = Convert.ToUInt16(line.Substring(7, 4), 16);
+                string dataHex = line.Substring(11, line.Length - 13);
+                byte[] data = Enumerable.Range(0, dataHex.Length / 2)
+                    .Select(x => Convert.ToByte(dataHex.Substring(x * 2, 2), 16))
+                    .ToArray();
+                byte checksum = Convert.ToByte(line.Substring(line.Length - 2, 2), 16);
 
                 BootLoaderPacketGen packetGen = new BootLoaderPacketGen();
 
                 rows.Add(new FlashRow(arrayID, rowNumber, dataLength, data, checksum));
-                }
-                catch
-                {
-                    continue;
-                }
             }
+            catch
+            {
+                continue;
+            }
+        }
 
-            return rows;
-       
+        return rows;
+
     }
 
 
@@ -158,23 +158,21 @@ public class PayloadProcessor
             allPackets.Add(CreateVerifyRowPacket(row.ArrayID, row.RowNumber));
         }
 
+
+        // Verify checksum
+        allPackets.Add(CreateVerifyChecksum());
+
         // EXIT BOOTLOADER
         allPackets.Add(CreateExitBootloader());
 
         return allPackets;
     }
 
-    private byte[] CreateExitBootloader()
-    {
-        byte[] packet = new byte[6];
-        packet[0] = 0x01;
-        packet[1] = 0x3B;
-        packet[2] = 0x00;
-        packet[3] = 0x00;
-        packet[4] = 0xC4;
-        packet[5] = 0x17;
-        return packet;
-    }
+    private byte[] CreateExitBootloader() => new byte[] { 0x01, 0x3B, 0x00, 0x00, 0xC4, 0xFF, 0x17 };
+
+
+    public static byte[] CreateVerifyChecksum() => new byte[] { 0x01, 0x31, 0x00, 0x00, 0xCE, 0xFF, 0x17 };
+
 
     private byte[] CreateVerifyRowPacket(byte arrayId, ushort rowNumber)
     {
