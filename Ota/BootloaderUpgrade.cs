@@ -32,19 +32,23 @@ namespace firmware_upgrade.Ota
 
         public event EventHandler<byte[]>? OnDataToWrite;
 
+        private byte[] SecurityId = [0x49, 0xA1, 0x34, 0xB6, 0xC7, 0x79];
 
-        private BootloaderUpgrade(string filePath, bool secureUpgrade)
+        public int MTUSize;
+        private BootloaderUpgrade(string filePath, bool secureUpgrade, byte[] securityId, int mtuSize)
         {
             FilePath = filePath;
             SecureUpgrade = secureUpgrade;
-            payloadProcessor = new PayloadProcessor(FilePath);
+            payloadProcessor = new PayloadProcessor(FilePath, false, SecurityId, mtuSize);
+            SecurityId = securityId;
+            MTUSize = mtuSize;
         }
 
         private int CurrentRowIndex;
 
-        public static async Task<BootloaderUpgrade> CreateAsync(string filePath, bool secureUpgrade)
+        public static async Task<BootloaderUpgrade> CreateAsync(string filePath, byte[] securityId, int mtuSize = 256, bool secureUpgrade = false)
         {
-            var instance = new BootloaderUpgrade(filePath, secureUpgrade);
+            var instance = new BootloaderUpgrade(filePath, secureUpgrade, securityId, mtuSize);
 
             instance.flashRows = await instance.InitRows();
 
@@ -75,17 +79,8 @@ namespace firmware_upgrade.Ota
 
         private async Task<List<byte[]>> InitRows()
         {
-            List<byte[]> rows = new List<byte[]>();
 
-            rows.Add(GetEnterBootloaderPacket());
-            rows.Add(GetFlashSizePacket());
-
-            List<byte[]> commands = await payloadProcessor.GetFirmwareFlashPackets();
-
-            rows.AddRange(commands);
-
-            return rows;
-
+           return  await payloadProcessor.GetFirmwareFlashPackets();
 
         }
         public async Task StartDFU()
@@ -123,21 +118,28 @@ namespace firmware_upgrade.Ota
 
         }
 
-
-
-        public static byte[] GetEnterBootloaderPacket() => new byte[]
+        public byte[] GetEnterBootloaderPacket()
         {
-            0x01, 0x38, 0x06, 0x00,
-            0x49, 0xA1, 0x34, 0xB6,
-            0xC7, 0x79, 0xAD, 0xFC, 0x17
-        };
+            if (SecurityId == null || SecurityId.Length == 0)
+            {
+                return new byte[] { 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 };
+            }
 
-        public static byte[] GetFlashSizePacket() => new byte[]
-        {
-            0x01, 0x32, 0x01, 0x00,
-            0x00,  0xCC, 0xFF,
-            0x17
-        };
+            ushort length = (ushort)SecurityId.Length;
+            byte lengthLow = (byte)(length & 0xFF);
+            byte lengthHigh = (byte)((length >> 8) & 0xFF);
+            var header = new byte[] { 0x01, 0x38, lengthLow, lengthHigh };
+            var footer = new byte[] { 0x17 };
+            var result = new byte[header.Length + SecurityId.Length + footer.Length];
+
+            Buffer.BlockCopy(header, 0, result, 0, header.Length);
+            Buffer.BlockCopy(SecurityId, 0, result, header.Length, SecurityId.Length);
+            Buffer.BlockCopy(footer, 0, result, header.Length + SecurityId.Length, footer.Length);
+
+            return result;
+
+
+        }
 
 
     }

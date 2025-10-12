@@ -149,6 +149,9 @@ namespace firmware_upgrade
 
         public ICommand OnStartBootloaderUpradeCommand => new Command<BLEDevice>(device => OnStartBootloaderUprade(device));
 
+        public ICommand OnStartSensorUpradeCommand => new Command<BLEDevice>(device => OnStartSensorUprade(device));
+
+
         public ICommand GetDeviceInfoCommand => new Command<BLEDevice>(OnGetDeviceInfo);
 
         public ICommand GetSoftwareVersionCommand => new Command<BLEDevice>(OnGetSoftwareVersion);
@@ -401,6 +404,9 @@ namespace firmware_upgrade
             }
         }
 
+        
+        
+        
         private async void OnStartBootloaderUprade(BLEDevice device, int retry = 0)
         {
             HideMenu(); // Hide menu when starting upgrade
@@ -431,9 +437,48 @@ namespace firmware_upgrade
 
             if (isInBootMode && device.BaseDevice.State == DeviceState.Connected)
             {
-                await UpgradeBootloader(device);
+                await UpgradeBootloader(device, "firmwares/P46/M2.22/353BL10604.cyacd");
             }
         }
+
+
+
+        private async void OnStartSensorUprade(BLEDevice device, int retry = 0)
+        {
+            HideMenu(); // Hide menu when starting upgrade
+
+            if (device.BaseDevice.State != DeviceState.Connected)
+            {
+                bool connected = await ConnectToDevice(device);
+                if (!connected)
+                {
+                    await DisplayAlert("Error", "Failed to connect to device before upgrade", "OK");
+                    return;
+                }
+            }
+
+            // Set upgrade in progress
+            await MainThread.InvokeOnMainThreadAsync(() =>
+            {
+                device.IsUpgradeInProgress = true;
+                device.UpgradeProgress = 0;
+            });
+
+            bool isInBootMode = await IsDeviceInSensorBootMode(device);
+
+            if (!isInBootMode)
+            {
+                await WriteToBootApplication(device, new JumpToBootRequest(), false);
+            }
+
+            if (isInBootMode && device.BaseDevice.State == DeviceState.Connected)
+            {
+                await UpgradeBootloader(device, "firmwares/P46/M2.22/353AP3M222.cyacd");
+            }
+        }
+
+
+
 
         public async Task<bool> IsDeviceInSensorBootMode(BLEDevice device)
         {
@@ -589,7 +634,7 @@ namespace firmware_upgrade
             }
         }
 
-        public async Task UpgradeBootloader(BLEDevice device)
+        public async Task UpgradeBootloader(BLEDevice device, string cyacdFilePath)
         {
             var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
             var writeCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
@@ -600,8 +645,8 @@ namespace firmware_upgrade
                 throw new Exception("WRITE CHAR CANNOT WRITE");
             }
 
-            string relativePath = "firmwares/P46/0225/353AP30225.cyacd";
-            var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, false);
+            string relativePath = cyacdFilePath;
+            var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, [0x49, 0xA1, 0x34, 0xB6, 0xC7, 0x79]);
 
             // 🔹 Notification handler (async-safe)
             writeCharacteristic.ValueUpdated += (s, e) =>
@@ -643,7 +688,10 @@ namespace firmware_upgrade
                     }
                 });
 
+                
+
                 Console.WriteLine($"[DOTNET] Progress for {device.Name}: {rowCount}%");
+
             };
 
             await bootloader.StartDFU();
@@ -655,7 +703,7 @@ namespace firmware_upgrade
 
             await GetFlashSize(characteristic);
 
-            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath);
+            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, false,  [0x49, 0xA1, 0x34, 0xB6, 0xC7, 0x79]);
             List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
 
             RowsToBeProgrammed = flashRows.Count;
@@ -690,7 +738,7 @@ namespace firmware_upgrade
 
             relativePath = "firmwares/P48/0227/353AP30227.cyacd";
 
-            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath);
+            PayloadProcessor payloadProcessor = new PayloadProcessor(relativePath, false, [0x49, 0xA1, 0x34, 0xB6, 0xC7, 0x79]);
 
             List<byte[]> flashRows = await payloadProcessor.GetFirmwareFlashPackets();
 

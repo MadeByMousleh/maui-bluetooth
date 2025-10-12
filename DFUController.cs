@@ -21,7 +21,7 @@ public class DFUController
         _payload = payload;
         _writeMethod = writeMethod;
         _bleDevice = bleDevice;
-        _processor = new PayloadProcessor(_payload);
+        _processor = new PayloadProcessor(_payload, false, [], 256);
         //_rows = _processor.GetFlashDataLines();
     }
 

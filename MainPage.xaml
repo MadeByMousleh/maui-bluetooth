@@ -4,175 +4,192 @@
     xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
     x:Name="PageRef"
-    BackgroundColor="{AppThemeBinding Light={StaticResource Gray100}, Dark={StaticResource Gray950}}">
+    BackgroundColor="{AppThemeBinding Light={StaticResource Gray100},
+                                      Dark={StaticResource Gray950}}">
 
     <Grid>
         <ScrollView>
             <VerticalStackLayout Padding="20" Spacing="20">
-                
-                <!-- Header Section -->
+
+                <!--  Header Section  -->
                 <Border
-                    BackgroundColor="{AppThemeBinding Light={StaticResource Primary}, Dark={StaticResource PrimaryDark}}"
-                    StrokeThickness="0"
-                    StrokeShape="RoundRectangle 16">
+                    BackgroundColor="{AppThemeBinding Light={StaticResource Primary},
+                                                      Dark={StaticResource PrimaryDark}}"
+                    StrokeShape="RoundRectangle 16"
+                    StrokeThickness="0">
                     <VerticalStackLayout Padding="24" Spacing="12">
                         <Image
                             Aspect="AspectFit"
                             HeightRequest="80"
+                            HorizontalOptions="Center"
                             SemanticProperties.Description="Firmware upgrade application logo"
-                            Source="dotnet_bot.png"
-                            HorizontalOptions="Center" />
-                        
+                            Source="dotnet_bot.png" />
+
                         <Label
-                            Text="Firmware Upgrade"
-                            FontSize="28"
                             FontAttributes="Bold"
-                            TextColor="White"
-                            HorizontalOptions="Center" />
-                        
+                            FontSize="28"
+                            HorizontalOptions="Center"
+                            Text="Firmware Upgrade"
+                            TextColor="White" />
+
                         <Label
-                            Text="Manage your device firmware updates"
                             FontSize="16"
-                            TextColor="White"
+                            HorizontalOptions="Center"
                             Opacity="0.9"
-                            HorizontalOptions="Center" />
+                            Text="Manage your device firmware updates"
+                            TextColor="White" />
                     </VerticalStackLayout>
                 </Border>
 
-                <!-- Devices Section -->
+                <!--  Devices Section  -->
                 <VerticalStackLayout Spacing="12">
                     <Label
-                        Text="Nearby Bluetooth Devices"
-                        FontSize="20"
                         FontAttributes="Bold"
-                        TextColor="{AppThemeBinding Light={StaticResource Gray900}, Dark={StaticResource Gray100}}" />
-                    
+                        FontSize="20"
+                        Text="Nearby Bluetooth Devices"
+                        TextColor="{AppThemeBinding Light={StaticResource Gray900},
+                                                    Dark={StaticResource Gray100}}" />
+
                     <CollectionView
                         x:Name="DevicesListView"
                         ItemsSource="{Binding Devices}"
                         SelectionMode="None">
                         <CollectionView.ItemsLayout>
-                            <LinearItemsLayout Orientation="Vertical" ItemSpacing="12" />
+                            <LinearItemsLayout ItemSpacing="12" Orientation="Vertical" />
                         </CollectionView.ItemsLayout>
                         <CollectionView.ItemTemplate>
                             <DataTemplate>
                                 <Border
-                                    BackgroundColor="{AppThemeBinding Light=White, Dark={StaticResource Gray900}}"
-                                    Stroke="{AppThemeBinding Light={StaticResource Gray200}, Dark={StaticResource Gray700}}"
-                                    StrokeThickness="1"
-                                    StrokeShape="RoundRectangle 12">
+                                    BackgroundColor="{AppThemeBinding Light=White,
+                                                                      Dark={StaticResource Gray900}}"
+                                    Stroke="{AppThemeBinding Light={StaticResource Gray200},
+                                                             Dark={StaticResource Gray700}}"
+                                    StrokeShape="RoundRectangle 12"
+                                    StrokeThickness="1">
                                     <Border.Shadow>
-                                        <Shadow Brush="{AppThemeBinding Light={StaticResource Gray300}, Dark={StaticResource Gray800}}"
-                                                Offset="0,2"
-                                                Radius="8"
-                                                Opacity="0.3" />
+                                        <Shadow
+                                            Brush="{AppThemeBinding Light={StaticResource Gray300},
+                                                                    Dark={StaticResource Gray800}}"
+                                            Opacity="0.3"
+                                            Radius="8"
+                                            Offset="0,2" />
                                     </Border.Shadow>
-                                    
+
                                     <Grid Padding="20" RowSpacing="16">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
-                                        
-                                        <!-- Device Info with Menu Button -->
+
+                                        <!--  Device Info with Menu Button  -->
                                         <Grid Grid.Row="0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                            
+
                                             <VerticalStackLayout Grid.Column="0" Spacing="4">
-                                                <Label 
-                                                    Text="{Binding Name}"
-                                                    FontSize="16"
+                                                <Label
                                                     FontAttributes="Bold"
-                                                    TextColor="{AppThemeBinding Light={StaticResource Gray900}, Dark={StaticResource Gray100}}" />
-                                                
-                                                <Label 
-                                                    Text="{Binding Id}"
+                                                    FontSize="16"
+                                                    Text="{Binding Name}"
+                                                    TextColor="{AppThemeBinding Light={StaticResource Gray900},
+                                                                                Dark={StaticResource Gray100}}" />
+
+                                                <Label
                                                     FontSize="12"
-                                                    TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray400}}"
-                                                    LineBreakMode="TailTruncation" />
-                                                
-                                                <!-- Connection Status -->
+                                                    LineBreakMode="TailTruncation"
+                                                    Text="{Binding Id}"
+                                                    TextColor="{AppThemeBinding Light={StaticResource Gray600},
+                                                                                Dark={StaticResource Gray400}}" />
+
+                                                <!--  Connection Status  -->
                                                 <StackLayout Orientation="Horizontal" Spacing="8">
-                                                    <Ellipse 
+                                                    <Ellipse
                                                         Fill="{Binding IsConnected, Converter={StaticResource BoolToConnectionColorConverter}}"
-                                                        WidthRequest="8"
                                                         HeightRequest="8"
-                                                        VerticalOptions="Center" />
-                                                    <Label 
-                                                        Text="{Binding IsConnected, Converter={StaticResource BoolToConnectionStatusConverter}}"
+                                                        VerticalOptions="Center"
+                                                        WidthRequest="8" />
+                                                    <Label
                                                         FontSize="12"
-                                                        TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray400}}" />
+                                                        Text="{Binding IsConnected, Converter={StaticResource BoolToConnectionStatusConverter}}"
+                                                        TextColor="{AppThemeBinding Light={StaticResource Gray600},
+                                                                                    Dark={StaticResource Gray400}}" />
                                                 </StackLayout>
                                             </VerticalStackLayout>
-                                            
-                                            <!-- Three Dots Menu Button -->
+
+                                            <!--  Three Dots Menu Button  -->
                                             <Button
                                                 x:Name="MenuButton"
                                                 Grid.Column="1"
-                                                Text="⋮"
-                                                FontSize="20"
-                                                FontAttributes="Bold"
                                                 BackgroundColor="Transparent"
-                                                TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray400}}"
                                                 BorderWidth="0"
-                                                WidthRequest="40"
-                                                HeightRequest="40"
-                                                CornerRadius="20"
                                                 Clicked="OnMenuButtonClicked"
                                                 CommandParameter="{Binding .}"
-                                                HorizontalOptions="End"
-                                                VerticalOptions="Start" />
-                                        </Grid>
-                                        
-                                        <!-- Progress Section -->
-                                        <VerticalStackLayout Grid.Row="1" Spacing="8" IsVisible="{Binding IsUpgradeInProgress}">
-                                            <Label
-                                                Text="Upgrade Progress"
-                                                FontSize="14"
+                                                CornerRadius="20"
                                                 FontAttributes="Bold"
-                                                TextColor="{AppThemeBinding Light={StaticResource Gray700}, Dark={StaticResource Gray300}}" />
-                                            
-                                            <ProgressBar 
+                                                FontSize="20"
+                                                HeightRequest="40"
+                                                HorizontalOptions="End"
+                                                Text="⋮"
+                                                TextColor="{AppThemeBinding Light={StaticResource Gray600},
+                                                                            Dark={StaticResource Gray400}}"
+                                                VerticalOptions="Start"
+                                                WidthRequest="40" />
+                                        </Grid>
+
+                                        <!--  Progress Section  -->
+                                        <VerticalStackLayout
+                                            Grid.Row="1"
+                                            IsVisible="{Binding IsUpgradeInProgress}"
+                                            Spacing="8">
+                                            <Label
+                                                FontAttributes="Bold"
+                                                FontSize="14"
+                                                Text="Upgrade Progress"
+                                                TextColor="{AppThemeBinding Light={StaticResource Gray700},
+                                                                            Dark={StaticResource Gray300}}" />
+
+                                            <ProgressBar
+                                                HeightRequest="6"
                                                 Progress="{Binding UpgradeProgress, Converter={StaticResource PercentToDoubleConverter}}"
-                                                ProgressColor="{StaticResource Primary}"
-                                                HeightRequest="6" />
-                                            
-                                            <Label 
-                                                Text="{Binding UpgradeProgress, StringFormat='{0}% Complete'}"
+                                                ProgressColor="{StaticResource Primary}" />
+
+                                            <Label
                                                 FontSize="12"
-                                                TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray400}}"
-                                                HorizontalOptions="End" />
+                                                HorizontalOptions="End"
+                                                Text="{Binding UpgradeProgress, StringFormat='{0}% Complete'}"
+                                                TextColor="{AppThemeBinding Light={StaticResource Gray600},
+                                                                            Dark={StaticResource Gray400}}" />
                                         </VerticalStackLayout>
-                                        
-                                        <!-- Action Buttons -->
+
+                                        <!--  Action Buttons  -->
                                         <HorizontalStackLayout Grid.Row="2" Spacing="12">
                                             <Button
-                                                Text="{Binding IsConnected, Converter={StaticResource BoolToConnectButtonTextConverter}}"
+                                                BackgroundColor="{Binding IsConnected, Converter={StaticResource BoolToConnectButtonColorConverter}}"
                                                 Command="{Binding BindingContext.ConnectCommand, Source={x:Reference PageRef}}"
                                                 CommandParameter="{Binding .}"
-                                                BackgroundColor="{Binding IsConnected, Converter={StaticResource BoolToConnectButtonColorConverter}}"
-                                                TextColor="White"
-                                                FontSize="14"
-                                                FontAttributes="Bold"
                                                 CornerRadius="8"
+                                                FontAttributes="Bold"
+                                                FontSize="14"
                                                 HeightRequest="40"
-                                                HorizontalOptions="FillAndExpand" />
-                                            
+                                                HorizontalOptions="FillAndExpand"
+                                                Text="{Binding IsConnected, Converter={StaticResource BoolToConnectButtonTextConverter}}"
+                                                TextColor="White" />
+
                                             <Button
-                                                Text="Quick Info"
+                                                BackgroundColor="{AppThemeBinding Light={StaticResource Secondary},
+                                                                                  Dark={StaticResource SecondaryDark}}"
                                                 Command="{Binding BindingContext.GetDeviceInfoCommand, Source={x:Reference PageRef}}"
                                                 CommandParameter="{Binding .}"
-                                                BackgroundColor="{AppThemeBinding Light={StaticResource Secondary}, Dark={StaticResource SecondaryDark}}"
-                                                TextColor="White"
-                                                FontSize="14"
-                                                FontAttributes="Bold"
                                                 CornerRadius="8"
+                                                FontAttributes="Bold"
+                                                FontSize="14"
                                                 HeightRequest="40"
-                                                HorizontalOptions="FillAndExpand" />
+                                                HorizontalOptions="FillAndExpand"
+                                                Text="Quick Info"
+                                                TextColor="White" />
                                         </HorizontalStackLayout>
                                     </Grid>
                                 </Border>
@@ -180,121 +197,147 @@
                         </CollectionView.ItemTemplate>
                         <CollectionView.EmptyView>
                             <ContentView>
-                                <VerticalStackLayout 
-                                    Padding="40" 
-                                    Spacing="16"
+                                <VerticalStackLayout
+                                    Padding="40"
                                     HorizontalOptions="Center"
+                                    Spacing="16"
                                     VerticalOptions="Center">
                                     <Label
-                                        Text="📱"
                                         FontSize="48"
-                                        HorizontalOptions="Center" />
-                                    <Label
-                                        Text="No devices found"
-                                        FontSize="18"
-                                        FontAttributes="Bold"
-                                        TextColor="{AppThemeBinding Light={StaticResource Gray600}, Dark={StaticResource Gray400}}"
-                                        HorizontalOptions="Center" />
-                                    <Label
-                                        Text="Make sure Bluetooth is enabled and devices are nearby"
-                                        FontSize="14"
-                                        TextColor="{AppThemeBinding Light={StaticResource Gray500}, Dark={StaticResource Gray500}}"
                                         HorizontalOptions="Center"
-                                        HorizontalTextAlignment="Center" />
+                                        Text="📱" />
+                                    <Label
+                                        FontAttributes="Bold"
+                                        FontSize="18"
+                                        HorizontalOptions="Center"
+                                        Text="No devices found"
+                                        TextColor="{AppThemeBinding Light={StaticResource Gray600},
+                                                                    Dark={StaticResource Gray400}}" />
+                                    <Label
+                                        FontSize="14"
+                                        HorizontalOptions="Center"
+                                        HorizontalTextAlignment="Center"
+                                        Text="Make sure Bluetooth is enabled and devices are nearby"
+                                        TextColor="{AppThemeBinding Light={StaticResource Gray500},
+                                                                    Dark={StaticResource Gray500}}" />
                                 </VerticalStackLayout>
                             </ContentView>
                         </CollectionView.EmptyView>
                     </CollectionView>
                 </VerticalStackLayout>
-                
-                <!-- Bottom spacing -->
+
+                <!--  Bottom spacing  -->
                 <BoxView HeightRequest="20" IsVisible="False" />
             </VerticalStackLayout>
         </ScrollView>
-        
-        <!-- Popup Menu Overlay -->
+
+        <!--  Popup Menu Overlay  -->
         <Border
             x:Name="MenuPopup"
-            IsVisible="False"
-            BackgroundColor="{AppThemeBinding Light=White, Dark={StaticResource Gray800}}"
-            Stroke="{AppThemeBinding Light={StaticResource Gray300}, Dark={StaticResource Gray600}}"
-            StrokeThickness="1"
-            StrokeShape="RoundRectangle 8"
-            WidthRequest="160"
-            HorizontalOptions="End"
-            VerticalOptions="Start"
             Margin="20,100,20,0"
+            BackgroundColor="{AppThemeBinding Light=White,
+                                              Dark={StaticResource Gray800}}"
+            HorizontalOptions="End"
+            IsVisible="False"
+            Stroke="{AppThemeBinding Light={StaticResource Gray300},
+                                     Dark={StaticResource Gray600}}"
+            StrokeShape="RoundRectangle 8"
+            StrokeThickness="1"
+            VerticalOptions="Start"
+            WidthRequest="160"
             ZIndex="1000">
             <Border.Shadow>
-                <Shadow Brush="{AppThemeBinding Light={StaticResource Gray400}, Dark={StaticResource Gray900}}"
-                        Offset="0,4"
-                        Radius="12"
-                        Opacity="0.4" />
+                <Shadow
+                    Brush="{AppThemeBinding Light={StaticResource Gray400},
+                                            Dark={StaticResource Gray900}}"
+                    Opacity="0.4"
+                    Radius="12"
+                    Offset="0,4" />
             </Border.Shadow>
-            
+
             <VerticalStackLayout Spacing="0">
-                <!-- Upgrade Bootloader Option -->
+                <!--  Upgrade Bootloader Option  -->
                 <Button
-                    Text="Upgrade Bootloader"
+                    Padding="12,0"
+                    BackgroundColor="Transparent"
+                    BorderWidth="0"
                     Command="{Binding OnStartBootloaderUpradeCommand}"
                     CommandParameter="{Binding SelectedDevice}"
-                    BackgroundColor="Transparent"
-                    TextColor="{AppThemeBinding Light={StaticResource Gray900}, Dark={StaticResource Gray100}}"
-                    FontSize="14"
-                    BorderWidth="0"
                     CornerRadius="0"
+                    FontSize="14"
                     HeightRequest="44"
                     HorizontalOptions="FillAndExpand"
-                    Padding="12,0" />
-                
-                <!-- Separator -->
+                    Text="Upgrade Bootloader"
+                    TextColor="{AppThemeBinding Light={StaticResource Gray900},
+                                                Dark={StaticResource Gray100}}" />
+
+                <Button
+                    Padding="12,0"
+                    BackgroundColor="Transparent"
+                    BorderWidth="0"
+                    Command="{Binding OnStartSensorUpradeCommand}"
+                    CommandParameter="{Binding SelectedDevice}"
+                    CornerRadius="0"
+                    FontSize="14"
+                    HeightRequest="44"
+                    HorizontalOptions="FillAndExpand"
+                    Text="Upgrade Sensor"
+                    TextColor="{AppThemeBinding Light={StaticResource Gray900},
+                                                Dark={StaticResource Gray100}}" />
+
+
+                <!--  Separator  -->
                 <BoxView
-                    BackgroundColor="{AppThemeBinding Light={StaticResource Gray200}, Dark={StaticResource Gray600}}"
+                    BackgroundColor="{AppThemeBinding Light={StaticResource Gray200},
+                                                      Dark={StaticResource Gray600}}"
                     HeightRequest="1"
                     HorizontalOptions="FillAndExpand" />
-                
-                <!-- Get Software Version Option -->
+
+                <!--  Get Software Version Option  -->
                 <Button
-                    Text="Get Software Version"
+                    Padding="12,0"
+                    BackgroundColor="Transparent"
+                    BorderWidth="0"
                     Command="{Binding GetSoftwareVersionCommand}"
                     CommandParameter="{Binding SelectedDevice}"
-                    BackgroundColor="Transparent"
-                    TextColor="{AppThemeBinding Light={StaticResource Gray900}, Dark={StaticResource Gray100}}"
-                    FontSize="14"
-                    BorderWidth="0"
                     CornerRadius="0"
+                    FontSize="14"
                     HeightRequest="44"
                     HorizontalOptions="FillAndExpand"
-                    Padding="12,0" />
-                
-                <!-- Separator -->
+                    Text="Get Software Version"
+                    TextColor="{AppThemeBinding Light={StaticResource Gray900},
+                                                Dark={StaticResource Gray100}}" />
+
+                <!--  Separator  -->
                 <BoxView
-                    BackgroundColor="{AppThemeBinding Light={StaticResource Gray200}, Dark={StaticResource Gray600}}"
+                    BackgroundColor="{AppThemeBinding Light={StaticResource Gray200},
+                                                      Dark={StaticResource Gray600}}"
                     HeightRequest="1"
                     HorizontalOptions="FillAndExpand" />
-                
-                <!-- Device Info Option -->
+
+                <!--  Device Info Option  -->
                 <Button
-                    Text="Device Information"
+                    Padding="12,0"
+                    BackgroundColor="Transparent"
+                    BorderWidth="0"
                     Command="{Binding GetDeviceDetailsCommand}"
                     CommandParameter="{Binding SelectedDevice}"
-                    BackgroundColor="Transparent"
-                    TextColor="{AppThemeBinding Light={StaticResource Gray900}, Dark={StaticResource Gray100}}"
-                    FontSize="14"
-                    BorderWidth="0"
                     CornerRadius="0"
+                    FontSize="14"
                     HeightRequest="44"
                     HorizontalOptions="FillAndExpand"
-                    Padding="12,0" />
+                    Text="Device Information"
+                    TextColor="{AppThemeBinding Light={StaticResource Gray900},
+                                                Dark={StaticResource Gray100}}" />
             </VerticalStackLayout>
         </Border>
-        
-        <!-- Invisible overlay to close menu when tapping outside -->
+
+        <!--  Invisible overlay to close menu when tapping outside  -->
         <BoxView
             x:Name="MenuOverlay"
-            IsVisible="False"
             BackgroundColor="Transparent"
             HorizontalOptions="FillAndExpand"
+            IsVisible="False"
             VerticalOptions="FillAndExpand"
             ZIndex="999">
             <BoxView.GestureRecognizers>

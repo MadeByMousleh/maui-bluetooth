@@ -1,9 +1,5 @@
-using Microsoft.Maui.Controls;
-using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
-using static System.Runtime.InteropServices.JavaScript.JSType;
+
 
 public class PayloadProcessor
 {
@@ -15,8 +11,10 @@ public class PayloadProcessor
     private byte[] _securityId = [0x49, 0xA1, 0x34, 0xB6, 0xC7, 0x79];
     private string _payload;
     private string _relativePath;
+    private bool _secureFlash;
+    private int _packetSize;
 
-    public PayloadProcessor(string cypressPayload)
+    public PayloadProcessor(string cypressPayload, bool secureFlash, byte[] securityId, int packetSize = 256)
     {
         _payload = cypressPayload;
         _relativePath = _payload.Trim(); // Remove surrounding whitespace
@@ -24,6 +22,9 @@ public class PayloadProcessor
         _siliconId = GetSiliconId();
         _siliconRev = GetSiliconRev();
         _checkSumType = GetChecksumType();
+        _secureFlash = secureFlash;
+        _packetSize = packetSize;
+        _securityId = securityId;
     }
 
 
@@ -38,7 +39,6 @@ public class PayloadProcessor
         return bytes;
     }
     // Private method to read data lines and parse them into FlashRow objects
-
 
 
     // SEND DATA PACKET (0x37)
@@ -134,44 +134,96 @@ public class PayloadProcessor
     }
 
 
-    // MAIN COMBINER
     public async Task<List<byte[]>> GetFirmwareFlashPackets()
     {
         List<FlashRow> flashRows = await ReadFlashRows();
         List<byte[]> allPackets = new List<byte[]>();
 
+        allPackets.Add(CreateEnterBootLoader());
+        allPackets.Add(GetFlashSizePacket());
+
         foreach (var row in flashRows)
         {
             byte[] data = row.Data;
-            int mid = data.Length;
-            //byte[] firstHalf = data.Take(mid).ToArray();
-            //byte[] secondHalf = data.Skip(mid).ToArray();
+            int total = row.DataLength;
+            int fullChunks = total / _packetSize;
+            int remaining = total % _packetSize;
 
+            // Case 1: Entire array smaller than one packet
+            if (_packetSize >= total)
+            {
+                allPackets.Add(CreateProgramRowPacket(row.ArrayID, row.RowNumber, data));
+                continue; // Move to next row
+            }
 
-            // SEND DATA
-            //allPackets.Add(CreateSendDataPacket(firstHalf));
+            // Case 2: Send all full packets
+            int offset = 0;
+            for (int i = 0; i < fullChunks; i++)
+            {
+                var packetData = data.Skip(offset).Take(_packetSize).ToArray();
+                allPackets.Add(CreateSendDataPacket(packetData));
+                offset += _packetSize;
+            }
 
-            // PROGRAM ROW
-            allPackets.Add(CreateProgramRowPacket(row.ArrayID, row.RowNumber, data));
+            // Case 3: Handle remaining elements (if any)
+            if (remaining > 0)
+            {
+                var lastPacket = data.Skip(offset).Take(remaining).ToArray();
+                allPackets.Add(CreateProgramRowPacket(row.ArrayID, row.RowNumber, lastPacket));
+            }
+            else
+            {
+                var finalFullRow = data.Skip(offset - _packetSize).Take(_packetSize).ToArray();
+                allPackets.Add(CreateProgramRowPacket(row.ArrayID, row.RowNumber, finalFullRow));
+            }
 
-            // VERIFY ROW
-            allPackets.Add(CreateVerifyRowPacket(row.ArrayID, row.RowNumber));
+            // Verify row if secure mode is on
+            if (_secureFlash)
+            {
+                allPackets.Add(CreateVerifyRowPacket(row.ArrayID, row.RowNumber));
+            }
         }
 
-
-        // Verify checksum
+        // Final steps: Verify checksum and exit
         allPackets.Add(CreateVerifyChecksum());
-
-        // EXIT BOOTLOADER
         allPackets.Add(CreateExitBootloader());
 
         return allPackets;
     }
 
+
+    private byte[] CreateEnterBootLoader()
+    {
+
+        if (_securityId == null || _securityId.Length == 0)
+        {
+            return new byte[] { 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 };
+        }
+
+        byte startCommand = 0x01;
+        byte command = 0x38;
+        byte endCommand = 0x17;
+
+        ushort dataLength = (ushort)_securityId.Length;
+
+        byte[] packetBeforeChecksum = new byte[1 + 1 + 2 + _securityId.Length];
+        int offset = 0;
+        packetBeforeChecksum[offset++] = startCommand;
+        packetBeforeChecksum[offset++] = command;
+        packetBeforeChecksum[offset++] = (byte)(dataLength & 0xFF);
+        packetBeforeChecksum[offset++] = (byte)(dataLength >> 8);
+        Array.Copy(_securityId, 0, packetBeforeChecksum, offset, _securityId.Length);
+
+        ushort checksum = CalculateChecksum(packetBeforeChecksum);
+
+        return packetBeforeChecksum
+            .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endCommand })
+            .ToArray();
+    }
+
     private byte[] CreateExitBootloader() => new byte[] { 0x01, 0x3B, 0x00, 0x00, 0xC4, 0xFF, 0x17 };
 
-
-    public static byte[] CreateVerifyChecksum() => new byte[] { 0x01, 0x31, 0x00, 0x00, 0xCE, 0xFF, 0x17 };
+    private static byte[] CreateVerifyChecksum() => new byte[] { 0x01, 0x31, 0x00, 0x00, 0xCE, 0xFF, 0x17 };
 
 
     private byte[] CreateVerifyRowPacket(byte arrayId, ushort rowNumber)
@@ -211,6 +263,13 @@ public class PayloadProcessor
         return crc;
     }
 
+
+    private static byte[] GetFlashSizePacket() => new byte[]
+    {
+            0x01, 0x32, 0x01, 0x00,
+            0x00,  0xCC, 0xFF,
+            0x17
+    };
 
     // Getters
     public byte[] GetSecurityId() => _securityId;
