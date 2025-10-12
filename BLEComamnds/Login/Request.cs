@@ -6,7 +6,7 @@ namespace firmware_upgrade.BLEComamnds.JumpToBoot
     public class LoginRequest: IRequest
     {
         private byte[] _command = new byte[9];
-        public LoginRequest() {
+        public  LoginRequest() {
             InitCommand();
         }
 

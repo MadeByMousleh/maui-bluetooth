@@ -285,6 +285,20 @@
                     TextColor="{AppThemeBinding Light={StaticResource Gray900},
                                                 Dark={StaticResource Gray100}}" />
 
+                <Button
+                    Padding="12,0"
+                    BackgroundColor="Transparent"
+                    BorderWidth="0"
+                    Command="{Binding OnStartActorUpradeCommand}"
+                    CommandParameter="{Binding SelectedDevice}"
+                    CornerRadius="0"
+                    FontSize="14"
+                    HeightRequest="44"
+                    HorizontalOptions="FillAndExpand"
+                    Text="Upgrade Actor"
+                    TextColor="{AppThemeBinding Light={StaticResource Gray900},
+                                                Dark={StaticResource Gray100}}" />
+
 
                 <!--  Separator  -->
                 <BoxView

@@ -1,3 +1,5 @@
+using firmware_upgrade.Helpers;
+using Microsoft.Maui.Controls;
 using System.Globalization;
 
 
@@ -14,7 +16,9 @@ public class PayloadProcessor
     private bool _secureFlash;
     private int _packetSize;
 
-    public PayloadProcessor(string cypressPayload, bool secureFlash, byte[] securityId, int packetSize = 256)
+    private bool _isActor;
+
+    public PayloadProcessor(string cypressPayload, bool secureFlash, byte[] securityId, int packetSize = 256, bool isActor = false)
     {
         _payload = cypressPayload;
         _relativePath = _payload.Trim(); // Remove surrounding whitespace
@@ -25,6 +29,7 @@ public class PayloadProcessor
         _secureFlash = secureFlash;
         _packetSize = packetSize;
         _securityId = securityId;
+        _isActor = isActor;
     }
 
 
@@ -60,9 +65,15 @@ public class PayloadProcessor
 
         ushort checksum = CalculateChecksum(packetBeforeChecksum);
 
-        return packetBeforeChecksum
+        byte[] finalPacket = packetBeforeChecksum
             .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endCommand })
             .ToArray();
+
+        if (_isActor)
+        {
+            return ConvertToActorPacket(finalPacket);
+        }
+        return finalPacket;
     }
 
     // PROGRAM ROW PACKET (0x39)
@@ -87,9 +98,15 @@ public class PayloadProcessor
 
         ushort checksum = CalculateChecksum(packetBeforeChecksum);
 
-        return packetBeforeChecksum
-            .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endCommand })
-            .ToArray();
+        byte[] finalPacket = packetBeforeChecksum
+           .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endCommand })
+           .ToArray();
+
+        if (_isActor)
+        {
+            return ConvertToActorPacket(finalPacket);
+        }
+        return finalPacket;
     }
 
 
@@ -195,9 +212,15 @@ public class PayloadProcessor
     private byte[] CreateEnterBootLoader()
     {
 
-        if (_securityId == null || _securityId.Length == 0)
+
+        if ((_securityId == null || _securityId.Length == 0) && _isActor == false)
         {
             return new byte[] { 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 };
+        }
+
+        if((_securityId == null || _securityId.Length == 0) && _isActor == true)
+        {
+            return ConvertToActorPacket(new byte[] { 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 });
         }
 
         byte startCommand = 0x01;
@@ -216,14 +239,42 @@ public class PayloadProcessor
 
         ushort checksum = CalculateChecksum(packetBeforeChecksum);
 
-        return packetBeforeChecksum
+        byte[] finalPacket = packetBeforeChecksum
             .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endCommand })
             .ToArray();
+
+        if (_isActor)
+        {
+            return ConvertToActorPacket(finalPacket);
+        }
+        return finalPacket;
     }
 
-    private byte[] CreateExitBootloader() => new byte[] { 0x01, 0x3B, 0x00, 0x00, 0xC4, 0xFF, 0x17 };
+    private byte[] CreateExitBootloader()
+    {
 
-    private static byte[] CreateVerifyChecksum() => new byte[] { 0x01, 0x31, 0x00, 0x00, 0xCE, 0xFF, 0x17 };
+        if (_isActor)
+        {
+            return ConvertToActorPacket(new byte[] { 0x01, 0x3B, 0x00, 0x00, 0xC4, 0xFF, 0x17 });
+        }
+
+        return new byte[] { 0x01, 0x3B, 0x00, 0x00, 0xC4, 0xFF, 0x17 };
+
+    }
+
+    // Update all static methods to call ConvertToActorPacket as static
+    private byte[] CreateVerifyChecksum()
+    {
+        byte[] packet = new byte[7] { 0x01, 0x31, 0x00, 0x00, 0xCE, 0xFF, 0x17 };
+
+        if (_isActor)
+        {
+            return ConvertToActorPacket(packet);
+        }
+
+        return packet;
+    }
+
 
 
     private byte[] CreateVerifyRowPacket(byte arrayId, ushort rowNumber)
@@ -246,9 +297,16 @@ public class PayloadProcessor
         ushort checksum = CalculateChecksum(packetBeforeChecksum);
 
         // Final packet: [packetBeforeChecksum][checksum LSB][checksum MSB][endPacket]
-        return packetBeforeChecksum
+        byte[] finalPacket = packetBeforeChecksum
             .Concat(new byte[] { (byte)(checksum & 0xFF), (byte)(checksum >> 8), endPacket })
             .ToArray();
+
+        if (_isActor)
+        {
+            return ConvertToActorPacket(finalPacket);
+        }
+
+        return finalPacket;
     }
 
     private ushort CalculateChecksum(byte[] buffer)
@@ -264,12 +322,16 @@ public class PayloadProcessor
     }
 
 
-    private static byte[] GetFlashSizePacket() => new byte[]
+    private byte[] GetFlashSizePacket()
     {
-            0x01, 0x32, 0x01, 0x00,
-            0x00,  0xCC, 0xFF,
-            0x17
-    };
+        byte[] packet = new byte[] { 0x01, 0x32, 0x01, 0x00, 0x00, 0xCC, 0xFF, 0x17 };
+
+        if (_isActor)
+        {
+            return ConvertToActorPacket(packet);
+        }
+        return packet;
+    }
 
     // Getters
     public byte[] GetSecurityId() => _securityId;
@@ -307,5 +369,50 @@ public class PayloadProcessor
         if (_checkSumType == null)
             _checkSumType = GetHeader().Substring(10, 2);
         return _checkSumType;
+    }
+
+    // Change all calls to ConvertToActorPacket from static context to use an instance reference.
+    // For static methods (e.g., CreateVerifyChecksum, GetFlashSizePacket), make ConvertToActorPacket static.
+
+    private byte[] ConvertToActorPacket(byte[] data)
+    {
+        byte startCommand = 0x01;
+        ushort telegramType = 0x0014;   // 2 bytes
+
+        int offset = 0;
+
+        // Header: start(1) + type(2) + length(2) + checksum(2)
+        byte[] header = new byte[1 + 2 + 2 + 2];
+
+        ushort totalLength = (ushort)(data.Length + header.Length); // header (1+2+2+2) + data + endCommand
+
+        // --- Build header ---
+        header[offset++] = startCommand;
+
+        // telegramType (little endian)
+        header[offset++] = (byte)(telegramType & 0xFF);
+        header[offset++] = (byte)(telegramType >> 8);
+
+        // totalLength (little endian)
+        header[offset++] = (byte)(totalLength & 0xFF);
+        header[offset++] = (byte)(totalLength >> 8);
+
+        // Calculate CRC for header so far (before adding checksum itself)
+        ushort checksum = BLE.CalculateCRC16(header.Take(offset).ToArray());
+
+        // append checksum (little endian)
+        header[offset++] = (byte)(checksum & 0xFF);
+        header[offset++] = (byte)(checksum >> 8);
+
+        // --- Build full packet ---
+        byte[] packet = new byte[header.Length + data.Length];
+
+        // Copy header
+        Array.Copy(header, 0, packet, 0, header.Length);
+
+        // Copy data after header
+        Array.Copy(data, 0, packet, header.Length, data.Length);
+
+        return packet;
     }
 }
