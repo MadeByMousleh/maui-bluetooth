@@ -34,6 +34,22 @@ namespace firmware_upgrade
 
         public IDevice BaseDevice { get; set; }
 
+        // Track notification subscriptions to avoid redundant operations
+        public bool IsBootApplicationNotificationActive { get; set; } = false;
+        public bool IsSensorBootNotificationActive { get; set; } = false;
+
+        // Store characteristics references for reuse
+        public ICharacteristic BootApplicationNotifyCharacteristic { get; set; }
+        public ICharacteristic SensorBootNotifyCharacteristic { get; set; }
+
+        public IService CurrentService { get; set; }
+        public ICharacteristic CurrentWriteCharachteristic { get; set; }
+        public ICharacteristic CurrentNotifyCharachteristic { get; set; }
+
+        public EventHandler<byte[]>? onNotify;
+
+
+
         private bool _isConnected = false;
         public bool IsConnected
         {
@@ -73,6 +89,20 @@ namespace firmware_upgrade
                     _isUpgradeInProgress = value;
                     OnPropertyChanged();
                 }
+            }
+        }
+
+        public bool IsApplication { get; internal set; }
+
+
+        public async Task Write(byte[] data)
+        {
+            if (CurrentWriteCharachteristic != null)
+            {
+                CurrentWriteCharachteristic.WriteType = CharacteristicWriteType.WithoutResponse;
+                Console.WriteLine("Writing - " + BitConverter.ToString(data));
+                await CurrentWriteCharachteristic.WriteAsync(data);
+
             }
         }
     }
@@ -161,12 +191,19 @@ namespace firmware_upgrade
 
         public ICommand GetDeviceDetailsCommand => new Command<BLEDevice>(OnGetDeviceDetails);
 
+        public bool IsNotifyInit = false;
+
         public IBluetoothLE ble { get; set; }
         public IAdapter adapter { get; set; }
 
         private object _lock = new();
 
         TaskCompletionSource<byte[]> tcs = new TaskCompletionSource<byte[]>();
+
+        // Fields for managing persistent notifications
+        private TaskCompletionSource<IGeneralReply> _bootApplicationResponseReceived;
+        private IGeneralReply _lastBootApplicationResponse;
+        private BootloaderUpgrade _currentBootloaderUpgrade;
 
 
 
@@ -241,6 +278,9 @@ namespace firmware_upgrade
 
             ble.StateChanged -= OnBleStateChanged; // remove old handler just in case
             ble.StateChanged += OnBleStateChanged;
+            adapter.ScanMode = ScanMode.LowLatency;
+
+
 
             if (!_isScanningStarted)
             {
@@ -337,20 +377,19 @@ namespace firmware_upgrade
 
         private async void OnConnectClicked(BLEDevice device)
         {
-            if (device.IsConnected)
-            {
-                await DisconnectFromDevice(device);
-            }
-            else
-            {
-                await ConnectToDevice(device);
-            }
+
+
+            await ConnectToDeviceNew(device);
+
         }
 
         private async Task DisconnectFromDevice(BLEDevice device)
         {
             try
             {
+                // Clean up notifications before disconnecting
+                await CleanupNotifications(device);
+
                 if (device.BaseDevice.State == DeviceState.Connected)
                 {
                     await adapter.DisconnectDeviceAsync(device.BaseDevice);
@@ -381,6 +420,8 @@ namespace firmware_upgrade
                 if (isInSensorBoot && device.BaseDevice.State == DeviceState.Connected)
                 {
                     await RequestMTU(device.BaseDevice);
+                    // Setup notifications for sensor boot mode
+                    await SetupSensorBootNotifications(device);
                     await MainThread.InvokeOnMainThreadAsync(() =>
                     {
                         device.IsConnected = true;
@@ -390,7 +431,10 @@ namespace firmware_upgrade
 
                 await adapter.ConnectToDeviceAsync(device.BaseDevice);
 
-                IGeneralReply loginSuccess = await WriteToBootApplication(device, new LoginRequest(), true);
+                // Setup notifications for boot application mode
+                await SetupBootApplicationNotifications(device);
+
+                IGeneralReply loginSuccess = await WriteToBootApplicationWithNotifications(device, new LoginRequest(), true);
 
                 await MainThread.InvokeOnMainThreadAsync(() =>
                 {
@@ -502,30 +546,32 @@ namespace firmware_upgrade
                 device.UpgradeProgress = 0;
             });
 
-            bool isInBootMode = await IsDeviceInActorBootMode(device);
+            //bool isInBootMode = await IsDeviceInActorBootMode(device);
+            //await Task.Delay(10000);
 
-            if (!isInBootMode)
-            {
-                await WriteToBootApplicationNoCleanup(device, new JumpToBootRequest(JumpToBootPayload.Actor), false);
-                // Wait a bit for the device to switch to boot mode
-                await Task.Delay(1000);
-            }
+
+            //if (!isInBootMode)
+            //{
+            //    await WriteToBootApplicationNoCleanup(device, new LoginRequest(), true);
+            //    // Wait a bit for the device to switch to boot mode
+            //    await Task.Delay(10000);
+            //}
 
             // Re-check if we're in boot mode after the jump command
-            isInBootMode = await IsDeviceInActorBootMode(device);
-            
-            if (isInBootMode && device.BaseDevice.State == DeviceState.Connected)
-            {
-                await UpgradeActor(device, "firmwares/P48/0227/353AP50227.cyacd");
-            }
-            else
-            {
-                await MainThread.InvokeOnMainThreadAsync(() =>
-                {
-                    device.IsUpgradeInProgress = false;
-                });
-                await DisplayAlert("Error", "Device did not enter actor boot mode", "OK");
-            }
+            //isInBootMode = await IsDeviceInActorBootMode(device);
+
+            //if (isInBootMode && device.BaseDevice.State == DeviceState.Connected)
+            //{
+            await UpgradeActor(device, "firmwares/P48/0227/353AP50227.cyacd");
+            //}
+            //else
+            //{
+            //    await MainThread.InvokeOnMainThreadAsync(() =>
+            //    {
+            //        device.IsUpgradeInProgress = false;
+            //    });
+            //    await DisplayAlert("Error", "Device did not enter actor boot mode", "OK");
+            //}
         }
 
 
@@ -549,8 +595,8 @@ namespace firmware_upgrade
         {
             try
             {
-                IGeneralReply response = await WriteToBootApplication(device, new ActorBootStateRequest(), true);
-                
+                IGeneralReply response = await WriteToBootApplicationWithNotifications(device, new ActorBootStateRequest(), true);
+
                 if (response?.Data is ActorBootStateReply bleReply)
                 {
                     if (bleReply.BootState == 1)
@@ -568,181 +614,282 @@ namespace firmware_upgrade
             }
         }
 
-
-        private async Task<IGeneralReply> WriteToBootApplicationNoCleanup(BLEDevice device, IRequest request, bool hasReply = true)
+        /// <summary>
+        /// Sets up notifications for boot application mode (once per connection)
+        /// </summary>
+        private async Task SetupBootApplicationNotifications(BLEDevice device)
         {
-            var reply = new IGeneralReply { IsAck = false, Data = null };
-
-            var service = await device.BaseDevice
-                   .GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
-
-            var writeCharacteristic = await service
-                .GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
-
-            if (!hasReply)
+            if (device.IsBootApplicationNotificationActive)
             {
-                byte[] command = request.Create();
-                await writeCharacteristic.WriteAsync(command);
-                return reply;
-            }
-
-            var notifyCharacteristic = await service
-                .GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
-
-            if (notifyCharacteristic == null || !notifyCharacteristic.CanUpdate)
-            {
-                Console.WriteLine("⚠️ Notification characteristic not available.");
-                return reply;
-            }
-
-            var responseReceived = new TaskCompletionSource<IGeneralReply>();
-
-            void OnValueUpdated(object s, CharacteristicUpdatedEventArgs e)
-            {
-                try
-                {
-                    var data = e.Characteristic.Value;
-                    var dataReply = BLEParser.Parse(data);
-
-                    if (dataReply.IsAck() && device.BaseDevice.State == DeviceState.Connected)
-                    {
-                        Console.WriteLine("✅ ACK received from device!");
-                        responseReceived.TrySetResult(new IGeneralReply { IsAck = true, Data = dataReply });
-                    }
-                    else
-                    {
-                        responseReceived.TrySetResult(new IGeneralReply { IsAck = false, Data = null });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"⚠️ Error parsing response: {ex.Message}");
-                    responseReceived.TrySetException(ex);
-                }
-         
+                Console.WriteLine("✅ Boot application notifications already active");
+                return;
             }
 
             try
             {
-                notifyCharacteristic.ValueUpdated += OnValueUpdated;
-                await notifyCharacteristic.StartUpdatesAsync();
+                var service = await device.BaseDevice
+                    .GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
 
-                byte[] command = request.Create();
-                await writeCharacteristic.WriteAsync(command);
+                var notifyCharacteristic = await service
+                    .GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
 
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
-
-                var completedTask = await Task.WhenAny(responseReceived.Task, timeoutTask);
-
-                if (completedTask == responseReceived.Task)
+                if (notifyCharacteristic == null || !notifyCharacteristic.CanUpdate)
                 {
-                    return await responseReceived.Task;
+                    Console.WriteLine("⚠️ Boot application notification characteristic not available.");
+                    return;
+                }
+
+                // Store reference for reuse
+                device.BootApplicationNotifyCharacteristic = notifyCharacteristic;
+
+                // Set up the notification handler
+                notifyCharacteristic.ValueUpdated += (s, e) => OnBootApplicationNotificationReceived(device, e);
+
+                await notifyCharacteristic.StartUpdatesAsync();
+                device.IsBootApplicationNotificationActive = true;
+
+                Console.WriteLine("✅ Boot application notifications setup complete");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Error setting up boot application notifications: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Sets up notifications for sensor boot mode (once per connection)
+        /// </summary>
+        private async Task SetupSensorBootNotifications(BLEDevice device)
+        {
+            if (device.IsSensorBootNotificationActive)
+            {
+                Console.WriteLine("✅ Sensor boot notifications already active");
+                return;
+            }
+
+            try
+            {
+                var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
+                var notifyCharacteristic = await service.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
+
+                if (notifyCharacteristic == null || !notifyCharacteristic.CanUpdate)
+                {
+                    Console.WriteLine("⚠️ Sensor boot notification characteristic not available.");
+                    return;
+                }
+
+                // Store reference for reuse
+                device.SensorBootNotifyCharacteristic = notifyCharacteristic;
+
+                // Set up the notification handler
+                notifyCharacteristic.ValueUpdated += (s, e) => OnSensorBootNotificationReceived(device, e);
+
+                await notifyCharacteristic.StartUpdatesAsync();
+                device.IsSensorBootNotificationActive = true;
+
+                Console.WriteLine("✅ Sensor boot notifications setup complete");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Error setting up sensor boot notifications: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Centralized handler for boot application notifications
+        /// </summary>
+        private void OnBootApplicationNotificationReceived(BLEDevice device, CharacteristicUpdatedEventArgs e)
+        {
+            try
+            {
+                var data = e.Characteristic.Value;
+
+                // Check if this is for a bootloader upgrade (actor upgrade)
+                if (_currentBootloaderUpgrade != null)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            Console.WriteLine("I am getting stufff" + BitConverter.ToString(data));
+                            await _currentBootloaderUpgrade.HandleResponse(data);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"⚠️ Error handling bootloader response: {ex.Message}");
+                        }
+                    });
                 }
                 else
                 {
-                    Console.WriteLine("❌ Timeout waiting for ACK");
+                    // Regular boot application command responses
+                    var dataReply = BLEParser.Parse(data);
+
+                    Console.WriteLine("I AM RECIEBING STUFF" + BitConverter.ToString(data));
+
+                    // Store the last received response for any waiting operations
+                    lock (_lock)
+                    {
+                        _lastBootApplicationResponse = new IGeneralReply
+                        {
+                            IsAck = dataReply.IsAck() && device.BaseDevice.State == DeviceState.Connected,
+                            Data = dataReply
+                        };
+
+                        // Signal any waiting operations
+                        _bootApplicationResponseReceived?.TrySetResult(_lastBootApplicationResponse);
+                    }
+                }
+
+                Console.WriteLine($"✅ Boot application notification received from {device.Name}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Error processing boot application notification: {ex.Message}");
+                _bootApplicationResponseReceived?.TrySetException(ex);
+            }
+        }
+
+        /// <summary>
+        /// Centralized handler for sensor boot notifications  
+        /// </summary>
+        private void OnSensorBootNotificationReceived(BLEDevice device, CharacteristicUpdatedEventArgs e)
+        {
+            try
+            {
+                var data = e.Characteristic.Value;
+
+                // Handle sensor boot responses (for bootloader upgrades)
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // This will be used by the bootloader upgrade process
+                        if (_currentBootloaderUpgrade != null)
+                        {
+                            await _currentBootloaderUpgrade.HandleResponse(data);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error handling sensor boot response: {ex.Message}");
+                    }
+                });
+
+                Console.WriteLine($"✅ Sensor boot notification received from {device.Name}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Error processing sensor boot notification: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Cleans up all notifications when disconnecting
+        /// </summary>
+        private async Task CleanupNotifications(BLEDevice device)
+        {
+            try
+            {
+                if (device.IsBootApplicationNotificationActive && device.BootApplicationNotifyCharacteristic != null)
+                {
+                    await device.BootApplicationNotifyCharacteristic.StopUpdatesAsync();
+                    device.IsBootApplicationNotificationActive = false;
+                    Console.WriteLine("✅ Boot application notifications stopped");
+                }
+
+                if (device.IsSensorBootNotificationActive && device.SensorBootNotifyCharacteristic != null)
+                {
+                    await device.SensorBootNotifyCharacteristic.StopUpdatesAsync();
+                    device.IsSensorBootNotificationActive = false;
+                    Console.WriteLine("✅ Sensor boot notifications stopped");
+                }
+
+                // Clear references
+                device.BootApplicationNotifyCharacteristic = null;
+                device.SensorBootNotifyCharacteristic = null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Error cleaning up notifications: {ex.Message}");
+            }
+        }
+
+
+        /// <summary>
+        /// Writes to boot application using persistent notifications (no cleanup needed)
+        /// </summary>
+        private async Task<IGeneralReply> WriteToBootApplicationWithNotifications(BLEDevice device, IRequest request, bool hasReply = true)
+        {
+            var reply = new IGeneralReply { IsAck = false, Data = null };
+
+            try
+            {
+                var service = await device.BaseDevice
+                       .GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
+
+                var writeCharacteristic = await service
+                    .GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
+
+                if (!hasReply)
+                {
+                    byte[] requestData = request.Create();
+                    await writeCharacteristic.WriteAsync(requestData);
+                    return reply;
+                }
+
+                // Ensure notifications are setup
+                await SetupBootApplicationNotifications(device);
+
+                if (!device.IsBootApplicationNotificationActive)
+                {
+                    Console.WriteLine("⚠️ Boot application notifications not available.");
+                    return reply;
+                }
+
+                // Create a new TaskCompletionSource for this specific request
+                lock (_lock)
+                {
+                    _bootApplicationResponseReceived = new TaskCompletionSource<IGeneralReply>();
+                }
+
+                // Send the command
+                byte[] command = request.Create();
+                await writeCharacteristic.WriteAsync(command);
+
+                // Wait for response with timeout
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
+
+                var completedTask = await Task.WhenAny(_bootApplicationResponseReceived.Task, timeoutTask);
+
+                if (completedTask == _bootApplicationResponseReceived.Task)
+                {
+                    return await _bootApplicationResponseReceived.Task;
+                }
+                else
+                {
+                    Console.WriteLine("❌ Timeout waiting for response");
                     return reply;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"⚠️ Error in WriteToBootApplicationNoCleanup: {ex.Message}");
+                Console.WriteLine($"⚠️ Error in WriteToBootApplicationWithNotifications: {ex.Message}");
                 return reply;
             }
-            // Note: We don't call StopUpdatesAsync here to avoid interfering with subsequent operations
+        }
+
+        private async Task<IGeneralReply> WriteToBootApplicationNoCleanup(BLEDevice device, IRequest request, bool hasReply = true)
+        {
+            // Use the new persistent notification method
+            return await WriteToBootApplicationNoCleanup(device, request, hasReply);
         }
 
         private async Task<IGeneralReply> WriteToBootApplication(BLEDevice device, IRequest request, bool hasReply = true)
         {
-            var reply = new IGeneralReply { IsAck = false, Data = null };
-
-            var service = await device.BaseDevice
-                   .GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
-
-            var writeCharacteristic = await service
-                .GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
-
-            var notifyCharacteristic = await service
-                .GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
-
-            if (notifyCharacteristic == null || !notifyCharacteristic.CanUpdate)
-            {
-                Console.WriteLine("⚠️ Notification characteristic not available.");
-                return reply;
-            }
-
-            var responseReceived = new TaskCompletionSource<IGeneralReply>();
-
-            void OnValueUpdated(object s, CharacteristicUpdatedEventArgs e)
-            {
-                try
-                {
-                    var data = e.Characteristic.Value;
-                    var dataReply = BLEParser.Parse(data);
-
-                    if (dataReply.IsAck() && device.BaseDevice.State == DeviceState.Connected)
-                    {
-                        Console.WriteLine("✅ ACK received from device!");
-                        responseReceived.TrySetResult(new IGeneralReply { IsAck = true, Data = dataReply });
-                    }
-                    else
-                    {
-                        responseReceived.TrySetResult(new IGeneralReply { IsAck = false, Data = null });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"⚠️ Error parsing response: {ex.Message}");
-                    responseReceived.TrySetException(ex);
-                }
-           
-            }
-
-            try
-            {
-                if (hasReply)
-                {
-                    notifyCharacteristic.ValueUpdated += OnValueUpdated;
-                    await notifyCharacteristic.StartUpdatesAsync();
-                }
-
-                byte[] command = request.Create();
-                await writeCharacteristic.WriteAsync(command);
-
-                if (!hasReply)
-                {
-                    return reply;
-                }
-
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
-
-                var completedTask = await Task.WhenAny(responseReceived.Task, timeoutTask);
-
-                if (completedTask == responseReceived.Task)
-                {
-                    return await responseReceived.Task;
-                }
-                else
-                {
-                    Console.WriteLine("❌ Timeout waiting for ACK");
-                    return reply;
-                }
-            }
-            finally
-            {
-                if (hasReply)
-                {
-                    try
-                    {
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"⚠️ Error stopping notifications: {ex.Message}");
-                    }
-                }
-            }
+            // Use the new persistent notification method
+            return await WriteToBootApplicationWithNotifications(device, request, hasReply);
         }
 
         public async Task WriteBootPackets(ICharacteristic writeCharacteristic, byte[] bytes)
@@ -826,28 +973,14 @@ namespace firmware_upgrade
                 throw new Exception("WRITE CHAR CANNOT WRITE");
             }
 
+            // Ensure sensor boot notifications are setup (reuse existing if already active)
+            await SetupSensorBootNotifications(device);
+
             string relativePath = cyacdFilePath;
             var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, [0x49, 0xA1, 0x34, 0xB6, 0xC7, 0x79]);
 
-            // 🔹 Notification handler (async-safe)
-            writeCharacteristic.ValueUpdated += (s, e) =>
-            {
-                var data = e.Characteristic.Value;
-
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await bootloader.HandleResponse(data);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"⚠️ Error parsing response: {ex.Message}");
-                    }
-                });
-            };
-
-            await writeCharacteristic.StartUpdatesAsync();
+            // Store reference for the notification handler to use
+            _currentBootloaderUpgrade = bootloader;
 
             // 🔹 BLE write handler
             bootloader.OnDataToWrite += async (sender, data) =>
@@ -866,13 +999,11 @@ namespace firmware_upgrade
                     if (rowCount >= 100)
                     {
                         device.IsUpgradeInProgress = false;
+                        _currentBootloaderUpgrade = null; // Clear reference
                     }
                 });
 
-
-
                 Console.WriteLine($"[DOTNET] Progress for {device.Name}: {rowCount}%");
-
             };
 
             await bootloader.StartDFU();
@@ -880,98 +1011,157 @@ namespace firmware_upgrade
 
         public async Task UpgradeActor(BLEDevice device, string cyacdFilePath)
         {
-            IService service = null;
-            ICharacteristic writeCharacteristic = null;
-            ICharacteristic notifyCharacteristic = null;
-            
-            try
-            {
-                service = await device.BaseDevice
-                    .GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
+            //IService service = null;
+            //ICharacteristic writeCharacteristic = null;
 
-                writeCharacteristic = await service
-                    .GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
+            InitCharachteristics(device);
 
-                notifyCharacteristic = await service
-                    .GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
 
-                if (writeCharacteristic == null || !writeCharacteristic.CanWrite)
-                {
-                    Console.WriteLine("⚠️ Write characteristic not available.");
-                    throw new Exception("WRITE CHAR CANNOT WRITE");
-                }
+            //string relativePath = cyacdFilePath;
+            //var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, [], 71, false, false);
 
-                if (notifyCharacteristic == null || !notifyCharacteristic.CanUpdate)
-                {
-                    Console.WriteLine("⚠️ Notification characteristic not available.");
-                    throw new Exception("NOTIFY CHAR CANNOT UPDATE");
-                }
+            //// Store reference for the notification handler to process bootloader responses
+            //_currentBootloaderUpgrade = bootloader;
 
-                string relativePath = cyacdFilePath;
-                var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, [], 71, false, true);
+            //// Setup notifications for boot application mode
+            //await SetupBootApplicationNotifications(device);
 
-                // 🔹 Notification handler (async-safe)
-                notifyCharacteristic.ValueUpdated += (s, e) =>
-                {
-                    var data = e.Characteristic.Value;
+            //IGeneralReply loginSuccess = await WriteToBootApplicationWithNotifications(device, new LoginRequest(), true);
 
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await bootloader.HandleResponse(data);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"⚠️ Error parsing response: {ex.Message}");
-                        }
-                    });
-                };
+            //Console.WriteLine(loginSuccess.Data + "YOYOYOYOOYOY");
 
-                await notifyCharacteristic.StartUpdatesAsync();
-
-                // 🔹 BLE write handler
-                bootloader.OnDataToWrite += async (sender, data) =>
-                {
-                    await WriteBootPackets(writeCharacteristic, data);
-                };
-                // 🔹 Progress UI - Update individual device progress
-                bootloader.OnProgressChanged += (sender, rowCount) =>
-                {
-                    MainThread.BeginInvokeOnMainThread(() =>
-                    {
-                        device.UpgradeProgress = rowCount;
-
-                        // If upgrade is complete
-                        if (rowCount >= 100)
-                        {
-                            device.IsUpgradeInProgress = false;
-                        }
-                    });
-
-                    Console.WriteLine($"[DOTNET] Progress for {device.Name}: {rowCount}%");
-                };
-
-                await bootloader.StartDFU();
-
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"⚠️ Error in UpgradeActor: {ex.Message}");
-                
-                // Update UI to show upgrade failed
-                await MainThread.InvokeOnMainThreadAsync(() =>
-                {
-                    device.IsUpgradeInProgress = false;
-                    device.UpgradeProgress = 0;
-                });
-                
-                throw;
-            }
-
-            
         }
 
+
+
+        //public async Task WriteBleMessage(byte[] bytes)
+        //{
+
+
+        //    characteristic.ValueUpdated += (o, args) =>
+        //    {
+        //        var bytes = args.Characteristic.Value;
+        //    };
+
+        //    await characteristic.StartUpdatesAsync();
+        //}
+
+        private async Task<bool> ConnectToDeviceNew(BLEDevice device)
+        {
+            try
+            {
+                await adapter.ConnectToDeviceAsync(device.BaseDevice);
+                await InitCharachteristics(device);
+                Console.WriteLine(device.CurrentService.Id);
+                Console.WriteLine(device.CurrentWriteCharachteristic.Id);
+
+                if (device.IsApplication)
+                {
+                    await device.Write(new byte[] { 0x01, 0x10, 0x00, 0x09, 0x00, 0xFB, 0x95, 0x1D, 0x01 });
+                    await Task.Delay(1000);
+                    await device.Write(new byte[] { 0x01, 0x01, 0x00, 0x08, 0x00, 0xd9, 0xcb, 0x02});
+                    await Task.Delay(1000);
+                    await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7});
+                    await Task.Delay(1000);
+                    await device.CurrentNotifyCharachteristic.StartUpdatesAsync();
+                    await Task.Delay(1000);
+                    await device.Write(new byte[] { 0x01, 0x10, 0x00, 0x09, 0x00, 0xFB, 0x95, 0x1D, 0x01 });
+                    await Task.Delay(1000);
+                    await device.Write(new byte[] { 0x01, 0x14, 0x00, 0x0E, 0x00, 0x9D, 0xC6, 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 });
+
+
+                    device.onNotify += (sender, data) =>
+                        {
+                            Console.WriteLine("Recieving - " + BitConverter.ToString(data));
+                        };
+                }
+
+                return true;
+
+
+            }
+            catch (DeviceConnectionException e)
+            {
+                Console.WriteLine("ERROR: Could not connect to device");
+                return false;
+            }
+            return false;
+        }
+
+        public async Task<bool> InitCharachteristics(BLEDevice device)
+        {
+            Console.WriteLine(device.BaseDevice.Id);
+            try
+            {
+                if (device != null)
+                {
+
+                    if (device.BaseDevice != null)
+                    {
+                        var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
+
+                        foreach (ICharacteristic ch in await service.GetCharacteristicsAsync())
+                        {
+
+                            Console.WriteLine("-------------------------------------------------");
+
+                            Console.WriteLine(ch.CanRead);
+                            Console.WriteLine(ch.CanUpdate);
+                            Console.WriteLine(ch.CanWrite);
+                            Console.WriteLine(ch.Uuid);
+
+                            Console.WriteLine("-------------------------------------------------");
+
+
+                        }
+
+                        device.CurrentService = service;
+                        device.CurrentWriteCharachteristic = await device.CurrentService.GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
+                        device.CurrentNotifyCharachteristic = await device.CurrentService.GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
+                        device.IsApplication = true;
+
+                        if (IsNotifyInit == false)
+                        {
+                            device.CurrentNotifyCharachteristic.ValueUpdated += (o, args) =>
+                            {
+                                var bytes = args.Characteristic.Value;
+                                device.onNotify?.Invoke(this, bytes);
+
+                                Console.WriteLine("Message recieved - " + BitConverter.ToString(bytes));
+                            };
+                            await device.CurrentNotifyCharachteristic.StartUpdatesAsync();
+
+                            IsNotifyInit = true;
+                        }
+                    }
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Could not find this service");
+            }
+
+            try
+            {
+                var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
+                device.CurrentService = service;
+                ICharacteristic writeAndNotify = await device.CurrentService.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
+                device.CurrentWriteCharachteristic = writeAndNotify;
+                device.CurrentNotifyCharachteristic = writeAndNotify;
+
+                return true;
+
+
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Could not find this service");
+            }
+            return false;
+
+
+        }
 
 
 
