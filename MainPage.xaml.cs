@@ -99,9 +99,26 @@ namespace firmware_upgrade
         {
             if (CurrentWriteCharachteristic != null)
             {
-                CurrentWriteCharachteristic.WriteType = CharacteristicWriteType.WithoutResponse;
-                Console.WriteLine("Writing - " + BitConverter.ToString(data));
-                await CurrentWriteCharachteristic.WriteAsync(data);
+                await Task.Run(async () =>
+                {
+                    await CurrentWriteCharachteristic.WriteAsync(data);
+                    Console.WriteLine("Writing - " + BitConverter.ToString(data));
+                    await Task.Delay(5000);
+                });
+             
+            }
+        }
+
+        public async Task WriteTwo(ReadOnlyMemory<byte> bytes)
+        {
+            if (CurrentWriteCharachteristic != null)
+            {
+                await Task.Run(async () =>
+                {
+                    await CurrentWriteCharachteristic.WriteAsync(bytes.ToArray());
+                    Console.WriteLine("Writing - " + BitConverter.ToString(bytes.ToArray()));
+                    await Task.Delay(5000);
+                });
 
             }
         }
@@ -1059,21 +1076,41 @@ namespace firmware_upgrade
                 {
                     await device.Write(new byte[] { 0x01, 0x10, 0x00, 0x09, 0x00, 0xFB, 0x95, 0x1D, 0x01 });
                     await Task.Delay(1000);
+
                     await device.Write(new byte[] { 0x01, 0x01, 0x00, 0x08, 0x00, 0xd9, 0xcb, 0x02});
-                    await Task.Delay(1000);
+                    await Task.Delay(5000);
+
                     await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7});
                     await Task.Delay(1000);
-                    await device.CurrentNotifyCharachteristic.StartUpdatesAsync();
+
+                    //await device.WriteTwo(new ReadOnlyMemory<byte>(new byte[] { 0x01, 0x14, 0x00, 0x0E, 0x00, 0x9D, 0xC6, 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 }));
+
+                    //byte one = 0x01;
+                    //byte two = 0x14;
+                    //byte three = 0x00;
+                    //byte one = 0x0E;
+                    //byte one = 0x00;
+                    //byte one = 0x9D;
+                    //byte one = 0xC6;
+                    //byte one = 0x01;
+                    //byte one = 0x38;
+                    //byte one = 0x00;
+                    //byte one = 0x00;
+                    //byte one = 0xC7;
+                    //byte one = 0xFF;
+                    //byte one = 0x17;
+
+                    await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7 });
                     await Task.Delay(1000);
-                    await device.Write(new byte[] { 0x01, 0x10, 0x00, 0x09, 0x00, 0xFB, 0x95, 0x1D, 0x01 });
+
+                    await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7 });
                     await Task.Delay(1000);
+
+
                     await device.Write(new byte[] { 0x01, 0x14, 0x00, 0x0E, 0x00, 0x9D, 0xC6, 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 });
 
 
-                    device.onNotify += (sender, data) =>
-                        {
-                            Console.WriteLine("Recieving - " + BitConverter.ToString(data));
-                        };
+
                 }
 
                 return true;
@@ -1099,25 +1136,23 @@ namespace firmware_upgrade
                     if (device.BaseDevice != null)
                     {
                         var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
+                        device.CurrentService = service;
+
 
                         foreach (ICharacteristic ch in await service.GetCharacteristicsAsync())
                         {
-
-                            Console.WriteLine("-------------------------------------------------");
-
-                            Console.WriteLine(ch.CanRead);
-                            Console.WriteLine(ch.CanUpdate);
-                            Console.WriteLine(ch.CanWrite);
-                            Console.WriteLine(ch.Uuid);
-
-                            Console.WriteLine("-------------------------------------------------");
-
+                            
+                            if(ch.CanUpdate)
+                            {
+                                device.CurrentNotifyCharachteristic = ch;
+                            }
+                            if(ch.CanWrite)
+                            {
+                                device.CurrentWriteCharachteristic = ch;
+                            }
 
                         }
 
-                        device.CurrentService = service;
-                        device.CurrentWriteCharachteristic = await device.CurrentService.GetCharacteristicAsync(Guid.Parse("0003cdd2-0000-1000-8000-00805f9b0131"));
-                        device.CurrentNotifyCharachteristic = await device.CurrentService.GetCharacteristicAsync(Guid.Parse("0003cdd1-0000-1000-8000-00805f9b0131"));
                         device.IsApplication = true;
 
                         if (IsNotifyInit == false)
