@@ -33,7 +33,7 @@ namespace firmware_upgrade
             BLEReplyRegistry.Register(0x012A, bytes => new GetSensorSwVersionReply(bytes)); // Register GetSensorSwVersionReply
             BLEReplyRegistry.Register(0x012C, bytes => new GetActorSwVersionReply(bytes)); // Register GetActorSwVersionReply
             BLEReplyRegistry.Register(0x0130, bytes => new GetSensorSwVersionExtendedReply(bytes)); // Register GetSensorSwVersionExtendedReply
-            BLEReplyRegistry.Register(0x0015, bytes => new ActorBootPacketReply(bytes)); // Register ActorBootPacketReply
+            //BLEReplyRegistry.Register(0x0015, bytes => new ActorBootPacketReply(bytes)); // Register ActorBootPacketReply
             BLEReplyRegistry.Register(0x0018, bytes => new ActorBootStateReply(bytes)); // Register ActorBootStateReply
             BLEReplyRegistry.Register(0x0132, bytes => new CheckPinCodeReply(bytes)); // Register CheckPinCodeReply
 

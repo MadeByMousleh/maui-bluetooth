@@ -13,16 +13,75 @@ using Plugin.BLE.Abstractions.Exceptions;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net.Mail;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 
 namespace firmware_upgrade
 {
 
+    public class MyDevice : IDevice
+    {
+        public Guid Id => throw new NotImplementedException();
+
+        public string Name => throw new NotImplementedException();
+
+        public int Rssi => throw new NotImplementedException();
+
+        public object NativeDevice => throw new NotImplementedException();
+
+        public DeviceState State => throw new NotImplementedException();
+
+        public IReadOnlyList<AdvertisementRecord> AdvertisementRecords => throw new NotImplementedException();
+
+        public bool IsConnectable => throw new NotImplementedException();
+
+        public bool SupportsIsConnectable => throw new NotImplementedException();
+
+        public DeviceBondState BondState => throw new NotImplementedException();
+
+        public void Dispose()
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<IService> GetServiceAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<IReadOnlyList<IService>> GetServicesAsync(CancellationToken cancellationToken = default)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<int> RequestMtuAsync(int requestValue)
+        {
+            throw new NotImplementedException();
+        }
+
+        public bool UpdateConnectionInterval(ConnectionInterval interval)
+        {
+            throw new NotImplementedException();
+        }
+
+        public bool UpdateConnectionParameters(ConnectParameters connectParameters = default)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<bool> UpdateRssiAsync()
+        {
+            throw new NotImplementedException();
+        }
+    }
+
     public class BLEDevice : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
 
+        private static readonly SemaphoreSlim _writeLock = new(1, 1);
+        private const int DefaultWriteDelayMs = 500; // adjust as needed
         protected void OnPropertyChanged([CallerMemberName] string propertyName = "")
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -95,38 +154,81 @@ namespace firmware_upgrade
         public bool IsApplication { get; internal set; }
 
 
-        public async Task Write(byte[] data)
+        public async Task Write(byte[] data,
+                               CancellationToken token = default,
+                               int delayMs = DefaultWriteDelayMs)
         {
-            if (CurrentWriteCharachteristic != null)
+            if (CurrentWriteCharachteristic == null)
+                throw new InvalidOperationException("Write characteristic not initialized.");
+
+            await _writeLock.WaitAsync(token); // 🔒 serialize writes
+            try
             {
-                await Task.Run(async () =>
-                {
-                    await CurrentWriteCharachteristic.WriteAsync(data);
-                    Console.WriteLine("Writing - " + BitConverter.ToString(data));
-                    await Task.Delay(5000);
-                });
-             
+                Console.WriteLine("Writing - " + BitConverter.ToString(data));
+
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(5)); // timeout safety
+
+                // Perform the BLE write
+                await CurrentWriteCharachteristic
+                    .WriteAsync(data)
+                    .WaitAsync(timeoutCts.Token);
+
+                // Wait between writes to avoid overloading BLE
+                await Task.Delay(delayMs, token);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("Write cancelled or timed out.");
+                throw;
+            }
+            finally
+            {
+                _writeLock.Release(); // 🔓 allow next write
             }
         }
 
-        public async Task WriteTwo(ReadOnlyMemory<byte> bytes)
+        public async Task WriteTwo(ReadOnlyMemory<byte> bytes,
+                                        CancellationToken token = default,
+                                        int delayMs = DefaultWriteDelayMs)
         {
-            if (CurrentWriteCharachteristic != null)
-            {
-                await Task.Run(async () =>
-                {
-                    await CurrentWriteCharachteristic.WriteAsync(bytes.ToArray());
-                    Console.WriteLine("Writing - " + BitConverter.ToString(bytes.ToArray()));
-                    await Task.Delay(5000);
-                });
+            if (CurrentWriteCharachteristic == null)
+                throw new InvalidOperationException("Write characteristic not initialized.");
 
+            await _writeLock.WaitAsync(token);
+            try
+            {
+                Console.WriteLine("Writing - " + BitConverter.ToString(bytes.ToArray()));
+
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+
+                await CurrentWriteCharachteristic
+                    .WriteAsync(bytes.ToArray())
+                    .WaitAsync(timeoutCts.Token);
+
+                await Task.Delay(delayMs, token);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("WriteTwo cancelled or timed out.");
+                throw;
+            }
+            finally
+            {
+                _writeLock.Release();
             }
         }
+
     }
+
 
     public partial class MainPage : ContentPage, INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
+
+        private readonly object _syncRoot = new object();
+
 
         protected void OnPropertyChanged([CallerMemberName] string propertyName = "")
         {
@@ -209,6 +311,9 @@ namespace firmware_upgrade
         public ICommand GetDeviceDetailsCommand => new Command<BLEDevice>(OnGetDeviceDetails);
 
         public bool IsNotifyInit = false;
+
+        private static readonly Guid MainServiceUuid = Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131");
+
 
         public IBluetoothLE ble { get; set; }
         public IAdapter adapter { get; set; }
@@ -295,7 +400,13 @@ namespace firmware_upgrade
 
             ble.StateChanged -= OnBleStateChanged; // remove old handler just in case
             ble.StateChanged += OnBleStateChanged;
-            adapter.ScanMode = ScanMode.LowLatency;
+
+
+            adapter.DeviceDisconnected += async (sender, e) =>
+            {
+                Console.WriteLine($"Device {e.Device.Name} disconnected. Attempting reconnect...");
+                await Task.Delay(2000); // wait for reboot
+            };
 
 
 
@@ -313,6 +424,8 @@ namespace firmware_upgrade
                 _isScanningStarted = true;
             }
         }
+
+
 
         private void OnBleStateChanged(object sender, BluetoothStateChangedArgs e)
         {
@@ -364,6 +477,9 @@ namespace firmware_upgrade
             }
 #endif
         }
+
+
+
 
         private async Task<bool> CheckAndRequestBluetoothPermissions()
         {
@@ -1051,151 +1167,293 @@ namespace firmware_upgrade
 
 
 
-        //public async Task WriteBleMessage(byte[] bytes)
-        //{
+        // Fix for CS8622: Add nullable annotation to 'sender' parameter
+        private void Device_ValueUpdatedSafe(object? sender, CharacteristicUpdatedEventArgs args)
+        {
+            var bytes = args.Characteristic.Value;
+            if (bytes != null)
+            {
+                Console.WriteLine("Message received - " + BitConverter.ToString(bytes));
+            }
+        }
 
 
-        //    characteristic.ValueUpdated += (o, args) =>
-        //    {
-        //        var bytes = args.Characteristic.Value;
-        //    };
+        private async Task CleanupCharacteristicHandlers(BLEDevice device)
+        {
+            IDevice connectedDevice = await GetConnectedDevice(device.BaseDevice.Id);
 
-        //    await characteristic.StartUpdatesAsync();
-        //}
+            try
+            {
+                if (device.CurrentNotifyCharachteristic != null)
+                {
+                    try
+                    {
+                        // Stop notifications safely
+                        await device.CurrentNotifyCharachteristic.StopUpdatesAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[CLEANUP] StopUpdates failed: {ex.Message}");
+                    }
+
+                    // Remove old event handlers
+                    device.CurrentNotifyCharachteristic.ValueUpdated -= Device_ValueUpdatedSafe;
+                    Console.WriteLine("[CLEANUP] Unsubscribed old notification handlers.");
+                }
+
+                device.CurrentNotifyCharachteristic = null;
+                device.CurrentWriteCharachteristic = null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[CLEANUP] Error during cleanup: " + ex.Message);
+            }
+        }
+
+
+        public async Task<IDevice> GetConnectedDevice(Guid id)
+        {
+            return CrossBluetoothLE.Current.Adapter.ConnectedDevices[0];
+        }
+
+        private async Task RefreshGattAfterBootloader(BLEDevice device)
+        {
+
+            IDevice connectedDevice = await GetConnectedDevice(device.BaseDevice.Id);
+            try
+            {
+                Console.WriteLine("[BOOT] Refreshing GATT service and characteristics...");
+
+                // Get the service again using the same device
+                var service = await connectedDevice.GetServiceAsync(MainServiceUuid);
+                if (service == null)
+                {
+                    Console.WriteLine("[BOOT] Service not found — device not ready yet.");
+                    return;
+                }
+
+                device.CurrentService = service;
+
+                // Get characteristics again (bootloader likely rebuilt them)
+                var characteristics = await service.GetCharacteristicsAsync();
+
+                foreach (var ch in characteristics)
+                {
+                    if (ch.CanWrite)
+                    {
+                        device.CurrentWriteCharachteristic = ch;
+                        Console.WriteLine($"[BOOT] Write characteristic found: {ch.Uuid}");
+                    }
+
+                    if (ch.CanUpdate)
+                    {
+                        device.CurrentNotifyCharachteristic = ch;
+
+                        ch.ValueUpdated += (o, args) =>
+                        {
+                            var bytes = args.Characteristic.Value;
+                            device.onNotify?.Invoke(this, bytes);
+                            Console.WriteLine("[BOOT Notify] " + BitConverter.ToString(bytes));
+                        };
+
+                        await ch.StartUpdatesAsync();
+                        Console.WriteLine($"[BOOT] Notifications re-subscribed for {ch.Uuid}");
+                    }
+                }
+
+                Console.WriteLine("[BOOT] GATT refreshed successfully — notifications active.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[BOOT] Refresh failed: " + ex.Message);
+            }
+        }
+
+
+        private async Task ForceReconnectAndResubscribe(BLEDevice device)
+        {
+            try
+            {
+                // Some BLE stacks think the old connection is still alive.
+                try
+                {
+                    await adapter.DisconnectDeviceAsync(device.BaseDevice);
+                }
+                catch
+                {
+                    // Ignore: may already be disconnected
+                }
+
+                Console.WriteLine("[BOOT] Waiting for device to reboot...");
+                await Task.Delay(3000);
+
+                Console.WriteLine("[BOOT] Reconnecting to device...");
+                await adapter.ConnectToDeviceAsync(device.BaseDevice);
+
+                // Get the specific service again
+                var service = await device.BaseDevice.GetServiceAsync(MainServiceUuid);
+                if (service == null)
+                {
+                    Console.WriteLine("[BOOT] Failed to find expected service.");
+                    return;
+                }
+
+                device.CurrentService = service;
+
+                // Enumerate characteristics within that service
+                var characteristics = await service.GetCharacteristicsAsync();
+
+                foreach (var ch in characteristics)
+                {
+                    // Reassign write characteristic
+                    if (ch.CanWrite)
+                    {
+                        device.CurrentWriteCharachteristic = ch;
+                        Console.WriteLine($"[BOOT] Write characteristic found: {ch.Uuid}");
+                    }
+
+                    // Re-subscribe to notifications
+                    if (ch.CanUpdate)
+                    {
+                        device.CurrentNotifyCharachteristic = ch;
+                        ch.ValueUpdated += (o, args) =>
+                        {
+                            var bytes = args.Characteristic.Value;
+                            device.onNotify?.Invoke(this, bytes);
+                            Console.WriteLine("[BOOT Notify] " + BitConverter.ToString(bytes));
+                        };
+
+                        await ch.StartUpdatesAsync();
+                        Console.WriteLine($"[BOOT] Notifications re-subscribed for {ch.Uuid}");
+                    }
+                }
+
+                Console.WriteLine("[BOOT] Reinitialization complete — bootloader mode ready.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[BOOT] Reconnect failed: " + ex.Message);
+            }
+        }
+
+        private async Task ReconnectToBootloaderAsync(IDevice baseDevice)
+        {
+            try
+            {
+                await adapter.ConnectToDeviceAsync(baseDevice);
+                var services = await baseDevice.GetServicesAsync();
+
+                foreach (var s in services)
+                {
+                    Console.WriteLine($"[Bootloader] Service: {s.Id}");
+                    var chars = await s.GetCharacteristicsAsync();
+
+                    foreach (var c in chars)
+                    {
+                        if (c.CanUpdate)
+                        {
+                            c.ValueUpdated += (o, args) =>
+                            {
+                                var bytes = args.Characteristic.Value;
+                                Console.WriteLine("[Bootloader notify] " + BitConverter.ToString(bytes));
+                            };
+                            await c.StartUpdatesAsync();
+                        }
+
+                        if (c.CanWrite)
+                        {
+                            Console.WriteLine("[Bootloader] Found write characteristic: " + c.Uuid);
+                            // Save this characteristic for subsequent bootloader commands
+                            // (You might store this in device.CurrentWriteCharacteristic again)
+                        }
+                    }
+                }
+
+                Console.WriteLine("[Bootloader] Reconnected and notifications re-subscribed.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[Bootloader reconnect failed] " + ex.Message);
+            }
+        }
+
 
         private async Task<bool> ConnectToDeviceNew(BLEDevice device)
         {
             try
             {
                 await adapter.ConnectToDeviceAsync(device.BaseDevice);
+
+                await RequestMTU(device.BaseDevice);
+
+                await CleanupCharacteristicHandlers(device);
+
                 await InitCharachteristics(device);
-                Console.WriteLine(device.CurrentService.Id);
-                Console.WriteLine(device.CurrentWriteCharachteristic.Id);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
                 if (device.IsApplication)
                 {
-                    await device.Write(new byte[] { 0x01, 0x10, 0x00, 0x09, 0x00, 0xFB, 0x95, 0x1D, 0x01 });
-                    await Task.Delay(1000);
+                    await device.Write(new byte[] { 0x01, 0x10, 0x00, 0x09, 0x00, 0xFB, 0x95, 0x1D, 0x01 }, cts.Token);
+                    //await device.Write(new byte[] { 0x01, 0x01, 0x00, 0x08, 0x00, 0xd9, 0xcb, 0x02 }, cts.Token);
+                    //await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7 }, cts.Token);
+                    //await device.Write(new byte[] { 0x01, 0x14, 0x00, 0x09, 0x00, 0x0A, 0x5f, 0x1d, 0x01 }, cts.Token);
 
-                    await device.Write(new byte[] { 0x01, 0x01, 0x00, 0x08, 0x00, 0xd9, 0xcb, 0x02});
-                    await Task.Delay(5000);
+                    // This command causes bootloader entry
+                    await device.Write(new byte[] { 0x01, 0x14, 0x00, 0x0E, 0x00, 0x9D, 0xC6, 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 }, cts.Token);
 
-                    await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7});
-                    await Task.Delay(1000);
+                    Console.WriteLine("Bootloader command sent — waiting for BLE stack to rebuild...");
+                    await Task.Delay(3000); // give device time to reboot internally
 
-                    //await device.WriteTwo(new ReadOnlyMemory<byte>(new byte[] { 0x01, 0x14, 0x00, 0x0E, 0x00, 0x9D, 0xC6, 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 }));
-
-                    //byte one = 0x01;
-                    //byte two = 0x14;
-                    //byte three = 0x00;
-                    //byte one = 0x0E;
-                    //byte one = 0x00;
-                    //byte one = 0x9D;
-                    //byte one = 0xC6;
-                    //byte one = 0x01;
-                    //byte one = 0x38;
-                    //byte one = 0x00;
-                    //byte one = 0x00;
-                    //byte one = 0xC7;
-                    //byte one = 0xFF;
-                    //byte one = 0x17;
-
-                    await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7 });
-                    await Task.Delay(1000);
-
-                    await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7 });
-                    await Task.Delay(1000);
-
-
-                    await device.Write(new byte[] { 0x01, 0x14, 0x00, 0x0E, 0x00, 0x9D, 0xC6, 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 });
-
-
+                    //// Refresh the same device's GATT service and resubscribe
+                    //await CleanupCharacteristicHandlers(device);
+                    //await RefreshGattAfterBootloader(device);
 
                 }
 
                 return true;
-
-
             }
-            catch (DeviceConnectionException e)
+            catch (DeviceConnectionException)
             {
                 Console.WriteLine("ERROR: Could not connect to device");
                 return false;
             }
-            return false;
         }
 
         public async Task<bool> InitCharachteristics(BLEDevice device)
         {
-            Console.WriteLine(device.BaseDevice.Id);
+
             try
             {
-                if (device != null)
+                IDevice connectedDevice = await GetConnectedDevice(device.BaseDevice.Id);
+
+                var services = await connectedDevice.GetServicesAsync();
+
+                foreach (var s in services)
                 {
-
-                    if (device.BaseDevice != null)
+                    foreach (var ch in await s.GetCharacteristicsAsync())
                     {
-                        var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("0003cdd0-0000-1000-8000-00805f9b0131"));
-                        device.CurrentService = service;
-
-
-                        foreach (ICharacteristic ch in await service.GetCharacteristicsAsync())
+                        if (ch.CanUpdate)
                         {
-                            
-                            if(ch.CanUpdate)
-                            {
-                                device.CurrentNotifyCharachteristic = ch;
-                            }
-                            if(ch.CanWrite)
-                            {
-                                device.CurrentWriteCharachteristic = ch;
-                            }
+                            device.CurrentNotifyCharachteristic = ch;
+                            ch.ValueUpdated += Device_ValueUpdatedSafe;
 
+                            await ch.StartUpdatesAsync();
                         }
 
-                        device.IsApplication = true;
-
-                        if (IsNotifyInit == false)
-                        {
-                            device.CurrentNotifyCharachteristic.ValueUpdated += (o, args) =>
-                            {
-                                var bytes = args.Characteristic.Value;
-                                device.onNotify?.Invoke(this, bytes);
-
-                                Console.WriteLine("Message recieved - " + BitConverter.ToString(bytes));
-                            };
-                            await device.CurrentNotifyCharachteristic.StartUpdatesAsync();
-
-                            IsNotifyInit = true;
-                        }
+                        if (ch.CanWrite)
+                            device.CurrentWriteCharachteristic = ch;
                     }
                 }
+
+                device.IsApplication = true;
+                Console.WriteLine("Characteristics re-initialized successfully.");
                 return true;
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Console.WriteLine("Could not find this service");
+                Console.WriteLine("Init failed: " + ex.Message);
+                return false;
             }
-
-            try
-            {
-                var service = await device.BaseDevice.GetServiceAsync(Guid.Parse("00060000-f8ce-11e4-abf4-0002a5d5c51b"));
-                device.CurrentService = service;
-                ICharacteristic writeAndNotify = await device.CurrentService.GetCharacteristicAsync(Guid.Parse("00060001-f8ce-11e4-abf4-0002a5d5c51b"));
-                device.CurrentWriteCharachteristic = writeAndNotify;
-                device.CurrentNotifyCharachteristic = writeAndNotify;
-
-                return true;
-
-
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine("Could not find this service");
-            }
-            return false;
-
-
         }
 
 
