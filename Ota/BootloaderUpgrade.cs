@@ -36,7 +36,7 @@ namespace firmware_upgrade.Ota
         {
             FilePath = filePath;
             IsSecureUpgrade = isSecureUpgrade;
-            payloadProcessor = new PayloadProcessor(FilePath, false, securityId, mtuSize, isActor);
+            payloadProcessor = new PayloadProcessor(FilePath, isSecureUpgrade, securityId, mtuSize, isActor);
             SecurityId = securityId;
             MTUSize = mtuSize;
             IsActor = isActor;

@@ -20,68 +20,15 @@ using System.Windows.Input;
 namespace firmware_upgrade
 {
 
-    public class MyDevice : IDevice
-    {
-        public Guid Id => throw new NotImplementedException();
-
-        public string Name => throw new NotImplementedException();
-
-        public int Rssi => throw new NotImplementedException();
-
-        public object NativeDevice => throw new NotImplementedException();
-
-        public DeviceState State => throw new NotImplementedException();
-
-        public IReadOnlyList<AdvertisementRecord> AdvertisementRecords => throw new NotImplementedException();
-
-        public bool IsConnectable => throw new NotImplementedException();
-
-        public bool SupportsIsConnectable => throw new NotImplementedException();
-
-        public DeviceBondState BondState => throw new NotImplementedException();
-
-        public void Dispose()
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<IService> GetServiceAsync(Guid id, CancellationToken cancellationToken = default)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<IReadOnlyList<IService>> GetServicesAsync(CancellationToken cancellationToken = default)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<int> RequestMtuAsync(int requestValue)
-        {
-            throw new NotImplementedException();
-        }
-
-        public bool UpdateConnectionInterval(ConnectionInterval interval)
-        {
-            throw new NotImplementedException();
-        }
-
-        public bool UpdateConnectionParameters(ConnectParameters connectParameters = default)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<bool> UpdateRssiAsync()
-        {
-            throw new NotImplementedException();
-        }
-    }
-
     public class BLEDevice : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler PropertyChanged;
 
         private static readonly SemaphoreSlim _writeLock = new(1, 1);
-        private const int DefaultWriteDelayMs = 500; // adjust as needed
+        private const int DefaultWriteDelayMs = 0; // adjust as needed
+
+        private TaskCompletionSource<byte[]>? _pendingResponseTcs;
+        private readonly object _syncRoot = new object();
         protected void OnPropertyChanged([CallerMemberName] string propertyName = "")
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -154,28 +101,49 @@ namespace firmware_upgrade
         public bool IsApplication { get; internal set; }
 
 
-        public async Task Write(byte[] data,
-                               CancellationToken token = default,
-                               int delayMs = DefaultWriteDelayMs)
+        public void OnValueUpdated(object sender, CharacteristicUpdatedEventArgs e)
+        {
+            var value = e.Characteristic?.Value;
+            if (value == null || value.Length == 0)
+                return;
+
+            Console.WriteLine("[BLE] Received: " + BitConverter.ToString(value));
+
+            // If there’s a pending write waiting for a response, complete it
+            _pendingResponseTcs?.TrySetResult(value);
+
+            // (You can still handle other messages here)
+        }
+
+
+        public async Task<byte[]?> Write(
+           byte[] data,
+           CancellationToken token = default,
+           int timeoutMs = 5000)
         {
             if (CurrentWriteCharachteristic == null)
                 throw new InvalidOperationException("Write characteristic not initialized.");
 
+            if (CurrentNotifyCharachteristic == null)
+                throw new InvalidOperationException("Notify characteristic not initialized.");
+
             await _writeLock.WaitAsync(token); // 🔒 serialize writes
             try
             {
-                Console.WriteLine("Writing - " + BitConverter.ToString(data));
+                _pendingResponseTcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
 
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(5)); // timeout safety
+                timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs)); // timeout safety
 
-                // Perform the BLE write
+                Console.WriteLine("Writing - " + BitConverter.ToString(data));
+
                 await CurrentWriteCharachteristic
                     .WriteAsync(data)
                     .WaitAsync(timeoutCts.Token);
 
-                // Wait between writes to avoid overloading BLE
-                await Task.Delay(delayMs, token);
+                // Wait for notification (no artificial delay)
+                var response = await _pendingResponseTcs.Task.WaitAsync(timeoutCts.Token);
+                return response;
             }
             catch (OperationCanceledException)
             {
@@ -184,41 +152,13 @@ namespace firmware_upgrade
             }
             finally
             {
+                _pendingResponseTcs = null;
                 _writeLock.Release(); // 🔓 allow next write
             }
         }
 
-        public async Task WriteTwo(ReadOnlyMemory<byte> bytes,
-                                        CancellationToken token = default,
-                                        int delayMs = DefaultWriteDelayMs)
-        {
-            if (CurrentWriteCharachteristic == null)
-                throw new InvalidOperationException("Write characteristic not initialized.");
 
-            await _writeLock.WaitAsync(token);
-            try
-            {
-                Console.WriteLine("Writing - " + BitConverter.ToString(bytes.ToArray()));
 
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
-
-                await CurrentWriteCharachteristic
-                    .WriteAsync(bytes.ToArray())
-                    .WaitAsync(timeoutCts.Token);
-
-                await Task.Delay(delayMs, token);
-            }
-            catch (OperationCanceledException)
-            {
-                Console.WriteLine("WriteTwo cancelled or timed out.");
-                throw;
-            }
-            finally
-            {
-                _writeLock.Release();
-            }
-        }
 
     }
 
@@ -1393,16 +1333,41 @@ namespace firmware_upgrade
 
                 if (device.IsApplication)
                 {
+
+
+
                     await device.Write(new byte[] { 0x01, 0x10, 0x00, 0x09, 0x00, 0xFB, 0x95, 0x1D, 0x01 }, cts.Token);
-                    //await device.Write(new byte[] { 0x01, 0x01, 0x00, 0x08, 0x00, 0xd9, 0xcb, 0x02 }, cts.Token);
-                    //await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7 }, cts.Token);
-                    //await device.Write(new byte[] { 0x01, 0x14, 0x00, 0x09, 0x00, 0x0A, 0x5f, 0x1d, 0x01 }, cts.Token);
+                    await device.Write(new byte[] { 0x01, 0x01, 0x00, 0x08, 0x00, 0xd9, 0xcb, 0x02 }, cts.Token);
+                    await device.Write(new byte[] { 0x01, 0x17, 0x00, 0x07, 0x00, 0xd9, 0xe7 }, cts.Token);
+
+                    //string relativePath = cyacdFilePath;
+
+
+                    //var bootloader = await BootloaderUpgrade.CreateAsync(relativePath, [], 71, false, false);
+
+                    var bootloader = await BootloaderUpgrade.CreateAsync("firmwares/P48/0227/353AP50227.cyacd", [], 65, true, true);
+
+                    bootloader.OnDataToWrite += async (sender, data) =>
+                    {
+                        using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+                        byte[]? response = await device.Write(data, cancellationTokenSource.Token);
+
+                        Console.WriteLine("RESPONSE:" + BitConverter.ToString(response));
+
+                        byte[] bootData = new byte[response.Length -7];
+                        Array.Copy(response, 7, bootData, 0, response.Length - 7);
+                        await bootloader.HandleResponse(bootData);
+
+                    };
+
+                    await bootloader.StartDFU();
 
                     // This command causes bootloader entry
-                    await device.Write(new byte[] { 0x01, 0x14, 0x00, 0x0E, 0x00, 0x9D, 0xC6, 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 }, cts.Token);
+                    //await device.Write(new byte[] { 0x01, 0x14, 0x00, 0x0E, 0x00, 0x9D, 0xC6, 0x01, 0x38, 0x00, 0x00, 0xC7, 0xFF, 0x17 }, cts.Token);
 
-                    Console.WriteLine("Bootloader command sent — waiting for BLE stack to rebuild...");
-                    await Task.Delay(3000); // give device time to reboot internally
+                    //Console.WriteLine("Bootloader command sent — waiting for BLE stack to rebuild...");
+                    //await Task.Delay(3000); // give device time to reboot internally
 
                     //// Refresh the same device's GATT service and resubscribe
                     //await CleanupCharacteristicHandlers(device);
@@ -1435,7 +1400,7 @@ namespace firmware_upgrade
                         if (ch.CanUpdate)
                         {
                             device.CurrentNotifyCharachteristic = ch;
-                            ch.ValueUpdated += Device_ValueUpdatedSafe;
+                            ch.ValueUpdated += device.OnValueUpdated;
 
                             await ch.StartUpdatesAsync();
                         }
